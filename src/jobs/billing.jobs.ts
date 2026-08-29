@@ -5,6 +5,7 @@ import { monthKey } from "../shared/id"
 
 export const JOB_SCAN_PLAN_REFILLS = "billing.scan-plan-refills" as const
 export const JOB_REFILL_PLAN_CREDITS = "billing.refill-plan-credits" as const
+export const JOB_SCAN_AUTO_RELOAD = "billing.scan-auto-reload" as const
 
 /**
  * Payloads carry ids and nothing else. The processor reads current state from

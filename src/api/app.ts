@@ -8,6 +8,7 @@ import { accountRoutes } from "../modules/account/account.routes"
 import { adminRoutes } from "../modules/admin/admin.routes"
 import { billingRoutes } from "../modules/billing/billing.routes"
 import { planRoutes } from "../modules/billing/plan.routes"
+import { webhookRoutes } from "../modules/billing/webhook.routes"
 import { modelRoutes } from "../modules/model/model.routes"
 import { projectRoutes } from "../modules/project/project.routes"
 import { usageRoutes } from "../modules/usage/usage.routes"
@@ -60,6 +61,10 @@ export function createApp() {
 	// Better Auth owns everything under its own base path and manages its own
 	// session handling, so it is mounted before our session middleware.
 	app.on(["GET", "POST"], "/v1/auth/*", (c) => auth.handler(c.req.raw))
+
+	// Before attachSession: the caller is Stripe, not a session, and the request
+	// is authenticated by its signature instead.
+	app.route("/v1/webhooks", webhookRoutes)
 
 	// Registered before the module routers below, which is what makes it run for
 	// them: Hono applies middleware to handlers added after it.

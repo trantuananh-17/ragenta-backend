@@ -71,6 +71,7 @@ src/
 ├── mail/                          transporter + templates
 ├── redis/  queue/                 connections and BullMQ queues
 ├── ai/                            model catalogue + which providers have keys
+├── payments/                      Stripe client and configuration guard
 ├── modules/                       workspace, project, model, billing, usage, audit, admin, account
 ├── jobs/                          job names + payload schemas
 └── workers/                       worker bootstrap + processors
@@ -113,6 +114,11 @@ DELETE /v1/workspaces/:id/projects/:projectId          owner, archived only
 
 GET    /v1/workspaces/:id/billing           plan, credits, seats
 GET    /v1/workspaces/:id/billing/transactions
+POST   /v1/workspaces/:id/billing/checkout  owner | admin — { plan } or { pack }
+POST   /v1/workspaces/:id/billing/portal    owner | admin
+GET    /v1/workspaces/:id/billing/auto-reload    owner | admin
+PUT    /v1/workspaces/:id/billing/auto-reload    owner | admin
+POST   /v1/webhooks/stripe                  signature-authenticated, no session
 GET    /v1/workspaces/:id/usage             ?days=30 — spend by operation/provider/model
 GET    /v1/workspaces/:id/usage/records     ?projectId= &operation=
 GET    /v1/workspaces/:id/models            catalogue: configured, entitled, selectable
@@ -176,6 +182,53 @@ carry both ids, so "which project spent the credits" is one query, not a second 
 Archiving is reversible and keeps history; permanent delete requires archiving first and is
 owner-only. Deleting a project nulls `usage_ledger.project_id` rather than removing the rows —
 billing history must stay complete.
+
+## Payments
+
+Stripe, integrated directly in the billing module rather than through a Better Auth plugin —
+product endpoints stay out of the auth layer.
+
+Payments are enabled only when `STRIPE_SECRET_KEY` **and** `STRIPE_WEBHOOK_SECRET` are both set.
+One without the other would mean a deployment that can charge a card but cannot verify the webhook
+confirming the charge, which takes money and grants nothing; so it is all or nothing, and every
+payment route answers "Payments are not enabled on this deployment" until both exist.
+
+```text
+POST /v1/workspaces/:id/billing/checkout     { plan } or { pack } → Stripe Checkout URL
+POST /v1/workspaces/:id/billing/portal       cards, invoices, cancellation
+GET  /v1/workspaces/:id/billing/auto-reload
+PUT  /v1/workspaces/:id/billing/auto-reload
+POST /v1/webhooks/stripe                     signature-authenticated, no session
+```
+
+**Credits are granted by the webhook, never by the checkout call.** A card can be authorised and
+still fail to settle, and only Stripe knows which. The grant's reference is the Stripe object id —
+the checkout session id, or the PaymentIntent id for auto-reload — so a redelivered event lands on
+the ledger's unique `(kind, reference)` and does nothing the second time.
+
+Plan changes are mirrored from `customer.subscription.*` onto our `subscription` row. A cancelled
+subscription keeps its plan name; `getPlan` reads the status, so entitlement drops to free without
+erasing what they were on. Activation calls the ordinary monthly refill, which is idempotent per
+period, so upgrading mid-month grants once and the scheduled refill later does nothing.
+
+### Auto-reload
+
+Buys a top-up pack when the balance falls under a threshold, so a long job does not die mid-run.
+Scanned every five minutes by the worker.
+
+The single-flight guard is `billing_preferences.auto_reload_locked_until`, claimed with a
+**conditional UPDATE** — not a read-then-write. Two overlapping ticks, or two worker replicas, both
+see a low balance; only one UPDATE can match the unlocked predicate. The webhook clears the lock on
+success, the scan clears it on a Stripe error, and it expires on its own if the process dies in
+between.
+
+A failed charge also switches auto-reload **off** and records the decline code. Retrying a declined
+card every five minutes is how an account gets flagged by its issuer, and the customer has to fix
+the card regardless.
+
+The amount charged comes from the Stripe price, not from `plans.ts`: the price of record lives in
+Stripe, and a customer who saw $39 at checkout must not be charged something else off-session
+because a constant drifted.
 
 ## Models
 
@@ -248,10 +301,6 @@ dollar of provider cost.
 
 `GET /v1/plans` serves this table from the same constants the seat cap and refill job enforce.
 
-## What was intentionally left out of the port
-
-Carried over from `auth-service`: layered Better Auth setup, the session `activeOrganizationId`
-seed, workspace roles and seat caps, the credit ledger shape, the audit log, Docker/Drizzle setup.
 
 Deliberately **not** carried over:
 
@@ -259,13 +308,13 @@ Deliberately **not** carried over:
 | --- | --- |
 | Teams | Ragenta uses Projects inside a workspace |
 | Waitlist, onboarding wizard, UTM, PostHog | Product-specific to the reference |
-| Stripe | No payment provider chosen; `subscription` keeps provider-neutral columns |
+| Their Stripe *plugin* wiring | Ported as a service instead — see Payments |
 | MCP OAuth provider, one-tap, JWT plugin | No consumer yet; add when one exists |
 | bcrypt password hashing | Only existed to match imported legacy hashes. Better Auth's default is used |
 | `node-cron` in the API process | Scheduled work belongs to the worker (BullMQ repeatable jobs) |
 
-Not built yet: the AI layer (`src/ai/`), per-workspace model/provider credentials, knowledge
-bases, documents, chat, agents, API keys. MinIO and Qdrant are in `docker-compose.yml` but have no
-client dependency until the ingestion module needs one.
+Not built yet: the AI adapter layer that actually calls a provider, knowledge bases, documents,
+chat, agents, API keys. MinIO and Qdrant are in `docker-compose.yml` but have no client dependency
+until the ingestion module needs one.
 
 

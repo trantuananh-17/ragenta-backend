@@ -23,3 +23,29 @@ billingRoutes.get(
 	requireWorkspaceRole("owner", "admin"),
 	billingController.transactions,
 )
+
+// Anything that can spend the workspace's money is owner or admin only.
+billingRoutes.post(
+	"/:workspaceId/billing/checkout",
+	workspaceScope,
+	requireWorkspaceRole("owner", "admin"),
+	billingController.createCheckout,
+)
+billingRoutes.post(
+	"/:workspaceId/billing/portal",
+	workspaceScope,
+	requireWorkspaceRole("owner", "admin"),
+	billingController.createPortal,
+)
+billingRoutes.get(
+	"/:workspaceId/billing/auto-reload",
+	workspaceScope,
+	requireWorkspaceRole("owner", "admin"),
+	billingController.getAutoReload,
+)
+billingRoutes.put(
+	"/:workspaceId/billing/auto-reload",
+	workspaceScope,
+	requireWorkspaceRole("owner", "admin"),
+	billingController.updateAutoReload,
+)

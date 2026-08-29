@@ -51,6 +51,8 @@ export interface PlanLimits {
 	topupsEnabled: boolean
 	modelTiers: ModelTier[]
 	price: PlanPrice
+	/** Key into `env.stripe.prices`. Null for plans that are not self-serve. */
+	stripePriceKey: "pro" | "team" | null
 }
 
 /**
@@ -67,6 +69,7 @@ export const PLAN_LIMITS: Record<PlanName, PlanLimits> = {
 		topupsEnabled: false,
 		modelTiers: ["economy"],
 		price: { monthlyUsd: 0, perSeatUsd: null, includedSeats: 1, extraSeatUsd: null },
+		stripePriceKey: null,
 	},
 	pro: {
 		seatLimit: 25,
@@ -75,6 +78,7 @@ export const PLAN_LIMITS: Record<PlanName, PlanLimits> = {
 		topupsEnabled: true,
 		modelTiers: ["economy", "premium"],
 		price: { monthlyUsd: null, perSeatUsd: 29, includedSeats: null, extraSeatUsd: 29 },
+		stripePriceKey: "pro",
 	},
 	team: {
 		seatLimit: 25,
@@ -83,6 +87,7 @@ export const PLAN_LIMITS: Record<PlanName, PlanLimits> = {
 		topupsEnabled: true,
 		modelTiers: ["economy", "premium"],
 		price: { monthlyUsd: 99, perSeatUsd: null, includedSeats: 5, extraSeatUsd: 19 },
+		stripePriceKey: "team",
 	},
 	enterprise: {
 		seatLimit: null,
@@ -91,6 +96,8 @@ export const PLAN_LIMITS: Record<PlanName, PlanLimits> = {
 		topupsEnabled: true,
 		modelTiers: ["economy", "premium"],
 		price: { monthlyUsd: null, perSeatUsd: null, includedSeats: null, extraSeatUsd: null },
+		// Enterprise is invoiced by hand, never through self-serve checkout.
+		stripePriceKey: null,
 	},
 }
 
@@ -110,15 +117,19 @@ export const SIGNUP_GRANT_CREDITS = 300_000
  * stop being the product.
  */
 export const TOPUP_PACKS = {
-	"1m": { credits: 1_000_000, priceUsd: 39 },
-	"5m": { credits: 5_000_000, priceUsd: 175 },
-	"15m": { credits: 15_000_000, priceUsd: 450 },
+	"1m": { credits: 1_000_000, priceUsd: 39, stripePriceKey: "topup1m" },
+	"5m": { credits: 5_000_000, priceUsd: 175, stripePriceKey: "topup5m" },
+	"15m": { credits: 15_000_000, priceUsd: 450, stripePriceKey: "topup15m" },
 } as const
 
 export type TopupPackId = keyof typeof TOPUP_PACKS
 
 export function isPlanName(value: string): value is PlanName {
 	return (PLAN_NAMES as string[]).includes(value)
+}
+
+export function isTopupPackId(value: string): value is TopupPackId {
+	return value in TOPUP_PACKS
 }
 
 export function planLimits(plan: PlanName): PlanLimits {

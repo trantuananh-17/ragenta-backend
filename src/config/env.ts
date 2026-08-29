@@ -31,6 +31,19 @@ const envSchema = z.object({
 	ANTHROPIC_API_KEY: z.string().optional(),
 	GOOGLE_API_KEY: z.string().optional(),
 
+	/**
+	 * Stripe. Both the key and the webhook secret must be present or the payment
+	 * surface stays off — a deployment that can charge cards but cannot verify
+	 * the webhooks confirming those charges is worse than one that cannot charge.
+	 */
+	STRIPE_SECRET_KEY: z.string().optional(),
+	STRIPE_WEBHOOK_SECRET: z.string().optional(),
+	STRIPE_PRICE_PRO: z.string().optional(),
+	STRIPE_PRICE_TEAM: z.string().optional(),
+	STRIPE_PRICE_TOPUP_1M: z.string().optional(),
+	STRIPE_PRICE_TOPUP_5M: z.string().optional(),
+	STRIPE_PRICE_TOPUP_15M: z.string().optional(),
+
 	SMTP_HOST: z.string().optional(),
 	SMTP_PORT: z.coerce.number().int().positive().default(587),
 	SMTP_USER: z.string().optional(),
@@ -96,6 +109,21 @@ export const env = {
 
 	databaseUrl: raw.DATABASE_URL,
 	redisUrl: raw.REDIS_URL,
+
+	stripe:
+		raw.STRIPE_SECRET_KEY && raw.STRIPE_WEBHOOK_SECRET
+			? {
+					secretKey: raw.STRIPE_SECRET_KEY,
+					webhookSecret: raw.STRIPE_WEBHOOK_SECRET,
+					prices: {
+						pro: raw.STRIPE_PRICE_PRO,
+						team: raw.STRIPE_PRICE_TEAM,
+						topup1m: raw.STRIPE_PRICE_TOPUP_1M,
+						topup5m: raw.STRIPE_PRICE_TOPUP_5M,
+						topup15m: raw.STRIPE_PRICE_TOPUP_15M,
+					},
+				}
+			: undefined,
 
 	providerKeys: {
 		openai: raw.OPENAI_API_KEY,

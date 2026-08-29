@@ -4,6 +4,7 @@ import { z } from "zod"
 import { auth } from "../auth/auth"
 import { env } from "../config/env"
 import { adjustCreditsSchema, adminListQuerySchema, setPlanSchema } from "../modules/admin/admin.dto"
+import { createCheckoutSchema, updateAutoReloadSchema } from "../modules/billing/billing.dto"
 import { updateModelSettingsSchema } from "../modules/model/model.dto"
 import {
 	createProjectSchema,
@@ -157,6 +158,38 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		tags: ["Billing"],
 		access: "owner, admin",
 		query: paginationQuerySchema,
+	},
+
+	"POST /v1/workspaces/:workspaceId/billing/checkout": {
+		summary: "Start Stripe checkout for a plan or a top-up pack",
+		tags: ["Billing"],
+		access: "owner, admin",
+		body: createCheckoutSchema,
+		status: 200,
+	},
+	"POST /v1/workspaces/:workspaceId/billing/portal": {
+		summary: "Open the Stripe billing portal (cards, invoices, cancellation)",
+		tags: ["Billing"],
+		access: "owner, admin",
+		status: 200,
+	},
+	"GET /v1/workspaces/:workspaceId/billing/auto-reload": {
+		summary: "Auto-reload settings and the last failure, if any",
+		tags: ["Billing"],
+		access: "owner, admin",
+	},
+	"PUT /v1/workspaces/:workspaceId/billing/auto-reload": {
+		summary: "Enable or change auto-reload. Requires a card already on file",
+		tags: ["Billing"],
+		access: "owner, admin",
+		body: updateAutoReloadSchema,
+	},
+
+	"POST /v1/webhooks/stripe": {
+		summary:
+			"Stripe webhook. Authenticated by signature, not by session — do not call directly",
+		tags: ["System"],
+		status: 200,
 	},
 
 	"GET /v1/workspaces/:workspaceId/usage": {

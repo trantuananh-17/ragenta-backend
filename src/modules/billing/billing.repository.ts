@@ -1,8 +1,13 @@
-import { count, desc, eq, lte } from "drizzle-orm"
+import { and, count, desc, eq, isNull, lt, lte, or, sql } from "drizzle-orm"
 
 import { db } from "../../db/client"
 import type { DbExecutor } from "../../db/client"
-import { creditBalance, creditTransaction, subscription } from "../../db/schema"
+import {
+	billingPreferences,
+	creditBalance,
+	creditTransaction,
+	subscription,
+} from "../../db/schema"
 import type { PaginationQuery } from "../../shared/pagination"
 
 export type CreditBalanceRow = typeof creditBalance.$inferSelect
@@ -122,6 +127,132 @@ export const billingRepository = {
 			.where(eq(subscription.organizationId, workspaceId))
 			.returning()
 		return rows[0]
+	},
+
+	async findByExternalSubscriptionId(externalId: string, executor: DbExecutor = db) {
+		const rows = await executor
+			.select()
+			.from(subscription)
+			.where(eq(subscription.externalSubscriptionId, externalId))
+			.limit(1)
+		return rows[0]
+	},
+
+	// ── Auto-reload ────────────────────────────────────────────────────────────
+
+	async findPreferences(workspaceId: string, executor: DbExecutor = db) {
+		const rows = await executor
+			.select()
+			.from(billingPreferences)
+			.where(eq(billingPreferences.organizationId, workspaceId))
+			.limit(1)
+		return rows[0]
+	},
+
+	async upsertPreferences(
+		workspaceId: string,
+		values: Partial<typeof billingPreferences.$inferInsert>,
+		executor: DbExecutor = db,
+	) {
+		const rows = await executor
+			.insert(billingPreferences)
+			.values({ organizationId: workspaceId, ...values })
+			.onConflictDoUpdate({
+				target: billingPreferences.organizationId,
+				set: values,
+			})
+			.returning()
+		return rows[0]
+	},
+
+	/**
+	 * Workspaces whose balance has fallen under their auto-reload threshold and
+	 * that are not already mid-charge.
+	 *
+	 * The whole predicate runs in SQL, including the balance comparison, so the
+	 * worker never pulls a list it then has to filter — and the lock claim below
+	 * repeats the expiry condition, so a row that became locked between this read
+	 * and that write is still rejected.
+	 */
+	async listAutoReloadCandidates(executor: DbExecutor = db) {
+		return executor
+			.select({
+				organizationId: billingPreferences.organizationId,
+				pack: billingPreferences.autoReloadPack,
+				customerId: subscription.externalCustomerId,
+			})
+			.from(billingPreferences)
+			.innerJoin(
+				creditBalance,
+				eq(creditBalance.organizationId, billingPreferences.organizationId),
+			)
+			.innerJoin(
+				subscription,
+				eq(subscription.organizationId, billingPreferences.organizationId),
+			)
+			.where(
+				and(
+					eq(billingPreferences.autoReloadEnabled, true),
+					sql`${billingPreferences.autoReloadThresholdCredits} is not null`,
+					sql`${billingPreferences.autoReloadPack} is not null`,
+					sql`${subscription.externalCustomerId} is not null`,
+					sql`(${creditBalance.planCredits} + ${creditBalance.topupCredits}) < ${billingPreferences.autoReloadThresholdCredits}`,
+					or(
+						isNull(billingPreferences.autoReloadLockedUntil),
+						lt(billingPreferences.autoReloadLockedUntil, sql`now()`),
+					),
+				),
+			)
+	},
+
+	/**
+	 * Take the single-flight lock, atomically.
+	 *
+	 * A conditional UPDATE, not read-then-write: two workers reading "unlocked"
+	 * at the same time and both proceeding is exactly the race this guards, and
+	 * only one UPDATE can match the unlocked predicate. An empty result means
+	 * somebody else owns the charge.
+	 */
+	async claimAutoReloadLock(workspaceId: string, minutes: number, executor: DbExecutor = db) {
+		const rows = await executor
+			.update(billingPreferences)
+			.set({ autoReloadLockedUntil: sql`now() + (${minutes} * interval '1 minute')` })
+			.where(
+				and(
+					eq(billingPreferences.organizationId, workspaceId),
+					or(
+						isNull(billingPreferences.autoReloadLockedUntil),
+						lt(billingPreferences.autoReloadLockedUntil, sql`now()`),
+					),
+				),
+			)
+			.returning({ organizationId: billingPreferences.organizationId })
+		return rows.length > 0
+	},
+
+	/**
+	 * Release the lock. With a failure code it also disables auto-reload:
+	 * retrying a declined card every five minutes is how an account gets flagged
+	 * by the issuer, and the customer needs to fix the card anyway.
+	 */
+	async releaseAutoReloadLock(
+		workspaceId: string,
+		failureCode?: string,
+		executor: DbExecutor = db,
+	) {
+		await executor
+			.update(billingPreferences)
+			.set({
+				autoReloadLockedUntil: null,
+				...(failureCode
+					? {
+							autoReloadEnabled: false,
+							lastFailureCode: failureCode,
+							lastFailureAt: new Date(),
+						}
+					: { lastFailureCode: null, lastFailureAt: null }),
+			})
+			.where(eq(billingPreferences.organizationId, workspaceId))
 	},
 
 	/** Workspaces whose plan period has elapsed — the refill worker's work list. */

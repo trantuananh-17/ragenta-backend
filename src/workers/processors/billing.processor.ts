@@ -1,9 +1,11 @@
 import type { Job } from "bullmq"
 
+import { autoReloadService } from "../../modules/billing/autoreload.service"
 import { billingService } from "../../modules/billing/billing.service"
 import { logger } from "../../shared/logger"
 import {
 	JOB_REFILL_PLAN_CREDITS,
+	JOB_SCAN_AUTO_RELOAD,
 	JOB_SCAN_PLAN_REFILLS,
 	enqueueRefillPlanCredits,
 	refillPlanCreditsPayload,
@@ -45,6 +47,10 @@ export async function processBillingJob(job: Job) {
 			return scanPlanRefills()
 		case JOB_REFILL_PLAN_CREDITS:
 			return refillPlanCredits(job)
+		// Each candidate takes an atomic lock before it is charged, so a tick that
+		// overlaps the previous one cannot double-bill a card.
+		case JOB_SCAN_AUTO_RELOAD:
+			return autoReloadService.runScan()
 		default:
 			// An unknown name is a deploy mismatch, not a transient fault. Fail it
 			// outright rather than retrying five times against the same gap.

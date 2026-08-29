@@ -1,7 +1,7 @@
 import { Worker } from "bullmq"
 import type { Job } from "bullmq"
 
-import { JOB_SCAN_PLAN_REFILLS } from "../jobs/billing.jobs"
+import { JOB_SCAN_AUTO_RELOAD, JOB_SCAN_PLAN_REFILLS } from "../jobs/billing.jobs"
 import { QUEUE_BILLING, getQueue } from "../queue/queues"
 import { createRedisConnection } from "../redis/client"
 import { logger } from "../shared/logger"
@@ -40,13 +40,21 @@ export function startWorkers(): Worker[] {
  * re-registering on every boot updates the schedule rather than stacking copies.
  */
 export async function registerSchedules(): Promise<void> {
-	await getQueue(QUEUE_BILLING).add(
+	const queue = getQueue(QUEUE_BILLING)
+
+	await queue.add(
 		JOB_SCAN_PLAN_REFILLS,
 		{},
-		{
-			repeat: { pattern: "0 * * * *" },
-			jobId: JOB_SCAN_PLAN_REFILLS,
-		},
+		{ repeat: { pattern: "0 * * * *" }, jobId: JOB_SCAN_PLAN_REFILLS },
 	)
+
+	// Every five minutes: a workspace that runs out mid-job should be topped up
+	// before the next job, not an hour later.
+	await queue.add(
+		JOB_SCAN_AUTO_RELOAD,
+		{},
+		{ repeat: { pattern: "*/5 * * * *" }, jobId: JOB_SCAN_AUTO_RELOAD },
+	)
+
 	log.info("schedules.registered")
 }
