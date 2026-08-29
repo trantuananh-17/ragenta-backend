@@ -1,0 +1,40 @@
+{
+  "name": "ragenta-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.5.2",
+  "scripts": {
+    "dev:api": "tsx watch src/main.api.ts",
+    "dev:worker": "tsx watch src/main.worker.ts",
+    "build": "tsup",
+    "start:api": "node dist/main.api.js",
+    "start:worker": "node dist/main.worker.js",
+    "typecheck": "tsc --noEmit",
+    "docs:check": "tsx scripts/smoke-openapi.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.14",
+    "better-auth": "^1.6.25",
+    "bullmq": "^5.63.0",
+    "dotenv": "^17.3.1",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.25",
+    "ioredis": "^5.9.0",
+    "nodemailer": "^8.0.10",
+    "pg": "^8.20.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/nodemailer": "^8.0.0",
+    "@types/pg": "^8.20.0",
+    "drizzle-kit": "^0.31.10",
+    "tsup": "^8.5.1",
+    "tsx": "^4.7.1",
+    "typescript": "^5.8.3"
+  }
+}

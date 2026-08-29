@@ -1,0 +1,26 @@
+# Reference implementation — cloned here for reading only, never part of this repo.
+# See CLAUDE.md and ../.claude/rules/reference-repos.md
+auth-service/
+
+# deps
+node_modules/
+
+# env
+.env
+.env.*
+!.env.example
+
+# build
+dist/
+
+# logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# editors / os
+.vscode/*
+!.vscode/launch.json
+.idea/
+.DS_Store

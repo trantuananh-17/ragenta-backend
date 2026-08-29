@@ -1,0 +1,98 @@
+import { Hono } from "hono"
+import { cors } from "hono/cors"
+
+import { auth } from "../auth/auth"
+import { env } from "../config/env"
+import { checkDatabaseConnection } from "../db/client"
+import { accountRoutes } from "../modules/account/account.routes"
+import { adminRoutes } from "../modules/admin/admin.routes"
+import { billingRoutes } from "../modules/billing/billing.routes"
+import { planRoutes } from "../modules/billing/plan.routes"
+import { projectRoutes } from "../modules/project/project.routes"
+import { usageRoutes } from "../modules/usage/usage.routes"
+import { workspaceRoutes } from "../modules/workspace/workspace.routes"
+import { errorHandler } from "./middleware/error-handler"
+import { buildOpenApiDocument, docsPage } from "./openapi"
+import { requestContext } from "./middleware/request-context"
+import { attachSession } from "./middleware/session"
+import type { AppEnv } from "./types"
+
+const DEFAULT_ORIGINS = [
+	"http://localhost:*",
+	"https://localhost:*",
+	"https://*.ragenta.com",
+]
+
+function wildcardToRegex(pattern: string) {
+	const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+	return new RegExp(`^${escaped.replace(/\*/g, "[^/]*")}$`)
+}
+
+const ALLOWED_ORIGINS = [...new Set([...DEFAULT_ORIGINS, ...env.trustedOrigins])].map(
+	wildcardToRegex,
+)
+
+export function createApp() {
+	const app = new Hono<AppEnv>()
+
+	app.onError(errorHandler)
+	app.use("*", requestContext)
+	app.use(
+		"*",
+		cors({
+			origin: (origin) =>
+				ALLOWED_ORIGINS.some((pattern) => pattern.test(origin)) ? origin : null,
+			allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+			allowHeaders: ["Content-Type", "Authorization", "x-request-id"],
+			credentials: true,
+		}),
+	)
+
+	app.get("/health", async (c) => {
+		const database = await checkDatabaseConnection()
+		return c.json(
+			{ status: database ? "ok" : "degraded", database, time: new Date().toISOString() },
+			database ? 200 : 503,
+		)
+	})
+
+	// Better Auth owns everything under its own base path and manages its own
+	// session handling, so it is mounted before our session middleware.
+	app.on(["GET", "POST"], "/v1/auth/*", (c) => auth.handler(c.req.raw))
+
+	// Registered before the module routers below, which is what makes it run for
+	// them: Hono applies middleware to handlers added after it.
+	app.use("/v1/*", attachSession)
+
+	app.route("/v1/me", accountRoutes)
+	app.route("/v1/plans", planRoutes)
+	app.route("/v1/workspaces", workspaceRoutes)
+	app.route("/v1/workspaces", projectRoutes)
+	app.route("/v1/workspaces", billingRoutes)
+	app.route("/v1/workspaces", usageRoutes)
+	app.route("/v1/admin", adminRoutes)
+
+	// Registered last so the document sees every route above it. Off in
+	// production unless DOCS_ENABLED says otherwise.
+	if (env.docsEnabled) {
+		let document: unknown
+
+		app.get("/v1/openapi.json", async (c) => {
+			document ??= await buildOpenApiDocument(app)
+			return c.json(document)
+		})
+		app.get("/v1/docs", (c) => c.html(docsPage))
+	}
+
+	app.notFound((c) =>
+		c.json(
+			{
+				error: { code: "NOT_FOUND", message: "No route matches this request." },
+				requestId: c.get("requestId") ?? "unknown",
+			},
+			404,
+		),
+	)
+
+	return app
+}
