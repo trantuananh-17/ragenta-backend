@@ -7,7 +7,9 @@ FROM base AS builder
 RUN apk add --no-cache gcompat
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml tsconfig.json tsup.config.ts ./
+# pnpm-workspace.yaml carries the allowBuilds approvals; without it the install
+# below fails exactly the way CI did.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json tsup.config.ts ./
 COPY src ./src
 COPY drizzle ./drizzle
 

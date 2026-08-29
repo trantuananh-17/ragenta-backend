@@ -1,0 +1,10 @@
+# pnpm 11 settings. These used to live under a "pnpm" key in package.json, which
+# pnpm 11 no longer reads at all — it warns and ignores it.
+
+# pnpm refuses to install until every dependency with a postinstall script is
+# either approved here or explicitly ignored. esbuild is what tsup and
+# drizzle-kit compile with; msgpackr-extract is bullmq's native serialisation
+# accelerator.
+allowBuilds:
+  esbuild: true
+  msgpackr-extract: true
