@@ -7,7 +7,7 @@ import { page } from "../../shared/pagination"
 import { billingService } from "../billing/billing.service"
 import type { CreditSource } from "../billing/billing.service"
 import { planLimits } from "../billing/plans"
-import { listModels, modelTier, priceUsage } from "./pricing"
+import { modelTier, priceUsage } from "./pricing"
 import { usageRepository } from "./usage.repository"
 import type { UsageFilter } from "./usage.repository"
 
@@ -43,40 +43,6 @@ export interface RecordUsageInput {
 }
 
 export const usageService = {
-	/**
-	 * Entitlement gate for model choice. Must be called **before** a provider
-	 * request, not after: charging correctly for a call the plan never allowed is
-	 * still a call we paid for.
-	 *
-	 * This is what keeps the free tier from costing money — free workspaces are
-	 * economy models only, which is also why every embedding model is economy.
-	 */
-	async assertModelAllowed(workspaceId: string, provider: string, model: string) {
-		const plan = await billingService.getPlan(workspaceId)
-		const tier = modelTier(provider, model)
-
-		if (!planLimits(plan).modelTiers.includes(tier)) {
-			throw new EntitlementError(
-				"MODEL_NOT_IN_PLAN",
-				`The ${plan} plan does not include ${model}. Upgrade to use premium models.`,
-				{ plan, provider, model, tier },
-			)
-		}
-	},
-
-	/** The model picker's catalogue, with each entry marked available or not. */
-	async listAvailableModels(workspaceId: string) {
-		const plan = await billingService.getPlan(workspaceId)
-		const allowed = planLimits(plan).modelTiers
-
-		return {
-			plan,
-			models: listModels().map((entry) => ({
-				...entry,
-				available: allowed.includes(entry.tier),
-			})),
-		}
-	},
 
 	/**
 	 * The one entry point the AI layer will call after a provider responds:

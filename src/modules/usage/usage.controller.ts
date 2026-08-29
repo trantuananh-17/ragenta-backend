@@ -27,9 +27,4 @@ export const usageController = {
 		const { days } = summaryQuerySchema.parse(c.req.query())
 		return c.json(await usageService.summary(membership.organizationId, days))
 	},
-
-	async models(c: AppContext) {
-		const membership = requireMembership(c)
-		return c.json(await usageService.listAvailableModels(membership.organizationId))
-	},
 }

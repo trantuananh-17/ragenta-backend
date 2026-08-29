@@ -15,6 +15,3 @@ usageRoutes.use("*", requireAuth)
 
 usageRoutes.get("/:workspaceId/usage", workspaceScope, usageController.summary)
 usageRoutes.get("/:workspaceId/usage/records", workspaceScope, usageController.list)
-
-// Which models this workspace's plan entitles it to — what a model picker reads.
-usageRoutes.get("/:workspaceId/models", workspaceScope, usageController.models)

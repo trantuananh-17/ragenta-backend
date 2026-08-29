@@ -23,6 +23,14 @@ const envSchema = z.object({
 	DATABASE_URL: z.string().min(1),
 	REDIS_URL: z.string().min(1),
 
+	/**
+	 * Ragenta pays for inference, so provider keys are server secrets. A provider
+	 * without a key here is simply not offered — see src/ai/providers.ts.
+	 */
+	OPENAI_API_KEY: z.string().optional(),
+	ANTHROPIC_API_KEY: z.string().optional(),
+	GOOGLE_API_KEY: z.string().optional(),
+
 	SMTP_HOST: z.string().optional(),
 	SMTP_PORT: z.coerce.number().int().positive().default(587),
 	SMTP_USER: z.string().optional(),
@@ -88,6 +96,12 @@ export const env = {
 
 	databaseUrl: raw.DATABASE_URL,
 	redisUrl: raw.REDIS_URL,
+
+	providerKeys: {
+		openai: raw.OPENAI_API_KEY,
+		anthropic: raw.ANTHROPIC_API_KEY,
+		google: raw.GOOGLE_API_KEY,
+	},
 
 	smtp: raw.SMTP_HOST
 		? {

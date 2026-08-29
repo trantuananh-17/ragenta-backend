@@ -1,0 +1,55 @@
+# Manual deploy of a version that was already built.
+#
+# This is the rollback button: releases are immutable version tags in GHCR
+# (ADR-009), so going back is deploying the tag before the bad one — no rebuild,
+# no revert commit, no waiting.
+#
+# It is also how you re-run a deploy that failed after its image was published,
+# or promote a version to an environment that was not yet wired up when it was
+# released.
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options: [staging, production]
+      version:
+        description: Version tag to deploy, e.g. v1.2.0 or v1.2.0rc1
+        required: true
+        type: string
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - name: Resolve image reference
+        id: meta
+        run: |
+          IMAGE="ghcr.io/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          echo "image=$IMAGE:${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+
+      # Deploying a version that was never built would leave the VM pulling a
+      # tag that does not exist, mid-deploy. Fail here instead, where nothing has
+      # been touched yet.
+      - name: Image exists in GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if ! docker manifest inspect "${{ steps.meta.outputs.image }}" > /dev/null 2>&1; then
+            echo "::error::${{ steps.meta.outputs.image }} not found. Was ${{ inputs.version }} ever released?"
+            exit 1
+          fi
+
+  deploy:
+    needs: resolve
+    uses: ./.github/workflows/deploy-template.yml
+    with:
+      environment: ${{ inputs.environment }}
+      version: ${{ inputs.version }}
+      image: ${{ needs.resolve.outputs.image }}
+    secrets: inherit

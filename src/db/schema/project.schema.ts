@@ -24,6 +24,13 @@ export const project = pgTable(
 		/** Unique within its workspace, not globally — it appears in workspace URLs. */
 		slug: text("slug").notNull(),
 		description: text("description"),
+		/**
+		 * Chat model override. Null means "inherit the workspace default", which
+		 * is the normal case — storing a copy of the default would freeze the
+		 * project on it the moment the workspace changed its mind.
+		 */
+		chatProvider: text("chat_provider"),
+		chatModel: text("chat_model"),
 		createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
 		/**
 		 * Archived projects stay readable and keep their usage history. Deleting is

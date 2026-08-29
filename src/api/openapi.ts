@@ -4,6 +4,7 @@ import { z } from "zod"
 import { auth } from "../auth/auth"
 import { env } from "../config/env"
 import { adjustCreditsSchema, adminListQuerySchema, setPlanSchema } from "../modules/admin/admin.dto"
+import { updateModelSettingsSchema } from "../modules/model/model.dto"
 import {
 	createProjectSchema,
 	listProjectsQuerySchema,
@@ -170,9 +171,20 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		query: paginationQuerySchema,
 	},
 	"GET /v1/workspaces/:workspaceId/models": {
-		summary: "Model catalogue, marked available by plan tier",
-		tags: ["Usage"],
+		summary: "Model catalogue, each entry marked configured, entitled and selectable",
+		tags: ["Models"],
 		access: "any member",
+	},
+	"GET /v1/workspaces/:workspaceId/settings/models": {
+		summary: "Chat and embedding models this workspace runs",
+		tags: ["Models"],
+		access: "any member",
+	},
+	"PUT /v1/workspaces/:workspaceId/settings/models": {
+		summary: "Change the workspace's default chat or embedding model",
+		tags: ["Models"],
+		access: "owner, admin",
+		body: updateModelSettingsSchema,
 	},
 
 	"GET /v1/admin/users": {

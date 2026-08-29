@@ -8,6 +8,7 @@ import { accountRoutes } from "../modules/account/account.routes"
 import { adminRoutes } from "../modules/admin/admin.routes"
 import { billingRoutes } from "../modules/billing/billing.routes"
 import { planRoutes } from "../modules/billing/plan.routes"
+import { modelRoutes } from "../modules/model/model.routes"
 import { projectRoutes } from "../modules/project/project.routes"
 import { usageRoutes } from "../modules/usage/usage.routes"
 import { workspaceRoutes } from "../modules/workspace/workspace.routes"
@@ -70,6 +71,7 @@ export function createApp() {
 	app.route("/v1/workspaces", projectRoutes)
 	app.route("/v1/workspaces", billingRoutes)
 	app.route("/v1/workspaces", usageRoutes)
+	app.route("/v1/workspaces", modelRoutes)
 	app.route("/v1/admin", adminRoutes)
 
 	// Registered last so the document sees every route above it. Off in

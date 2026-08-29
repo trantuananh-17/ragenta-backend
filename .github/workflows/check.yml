@@ -1,0 +1,93 @@
+# Quality gate for pull requests, and the same gate a release runs before it
+# builds anything.
+#
+# There is no test suite yet, so this is what stands between a broken commit and
+# main: the compiler, the bundler, the OpenAPI document, and a check that the
+# schema and its migrations still agree.
+name: Check
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  # Called by release.yml so a tag cannot ship code that would not pass a PR.
+  workflow_call:
+
+# A new push to the same branch makes the in-flight run pointless — cancel it
+# rather than pay for both.
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node before corepack: corepack ships with Node, so it does not exist on
+      # PATH until this step has run.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22" # matches Dockerfile's `FROM node:22-alpine`
+
+      # corepack activates the exact pnpm pinned by package.json#packageManager,
+      # so CI cannot silently resolve a different one than developers use.
+      - name: Enable corepack
+        run: corepack enable
+
+      # Ask pnpm where its store is rather than hardcoding a path — a wrong path
+      # caches an empty directory, which always misses while looking like it works.
+      - name: Locate the pnpm store
+        id: pnpm-store
+        run: echo "dir=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.dir }}
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      - name: Install dependencies
+        # --frozen-lockfile: fail rather than silently resolve a newer version.
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      # Boots the Hono app object and renders the OpenAPI document. Catches a
+      # route that throws at registration, a broken DTO, and — because the path
+      # list is read from the live router — a route that was added but never
+      # described.
+      #
+      # No database or Redis is touched: the app opens connections lazily and
+      # this only calls /v1/openapi.json.
+      - name: Build the OpenAPI document
+        env:
+          NODE_ENV: development
+          API_BASE_URL: http://localhost:8080
+          APP_BASE_URL: http://localhost:3000
+          BETTER_AUTH_SECRET: ci-placeholder-secret-at-least-32-characters
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+          REDIS_URL: redis://localhost:6379
+        run: pnpm docs:check
+
+      # `src/db/schema` and `drizzle/` must not drift apart. Regenerating and
+      # finding a diff means someone changed the schema without producing the
+      # migration for it — which would pass every other check here and then fail
+      # in production, where the tables do not match the code.
+      - name: Migrations are in sync with the schema
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+        run: |
+          pnpm db:generate
+          if ! git diff --quiet --exit-code -- drizzle; then
+            echo "::error::src/db/schema changed without a migration. Run 'pnpm db:generate' and commit ./drizzle."
+            git --no-pager diff --stat -- drizzle
+            exit 1
+          fi

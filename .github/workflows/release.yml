@@ -1,0 +1,100 @@
+# Tag → image → environment.
+#
+#   v1.2.0      production
+#   v1.2.0rc1   staging
+#
+# The tag shape is the only thing that selects the environment, matching the
+# convention already in use across the NYB repositories. Both forms of release
+# candidate are accepted (`rc1` and `-rc.1`) so a tag can never be pushed and
+# then silently do nothing.
+#
+# Building happens on the tag, not on a merge to main: the artifact is the
+# release, and it must be reproducible from exactly the commit that was tagged.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+" # production
+      - "v[0-9]+.[0-9]+.[0-9]+rc[0-9]+" # staging
+      - "v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+" # staging
+
+jobs:
+  # A tag must clear the same gate a pull request does. Skipping it here is how
+  # a release ships something main never accepted.
+  check:
+    uses: ./.github/workflows/check.yml
+
+  build:
+    name: Build and push
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # publish to GHCR as the workflow's own token
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      environment: ${{ steps.meta.outputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve target environment and image reference
+        id: meta
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          # `rc` anywhere in the tag means release candidate, which means staging.
+          if [[ "$VERSION" == *rc* ]]; then
+            ENVIRONMENT=staging
+          else
+            ENVIRONMENT=production
+          fi
+          # GHCR rejects uppercase; the owner segment is user-controlled.
+          IMAGE="ghcr.io/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+
+          echo "version=$VERSION"          >> "$GITHUB_OUTPUT"
+          echo "environment=$ENVIRONMENT"  >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE:$VERSION"     >> "$GITHUB_OUTPUT"
+          echo "Releasing $VERSION to $ENVIRONMENT as $IMAGE:$VERSION"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # Only the immutable version tag. No `latest`, no moving `staging`
+          # pointer: environments pin an exact version so a rollback is just
+          # re-deploying the tag before this one (ADR-009).
+          tags: ${{ steps.meta.outputs.image }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          {
+            echo "### Released \`${{ github.ref_name }}\` → ${{ steps.meta.outputs.environment }}"
+            echo
+            echo "Image: \`${{ steps.meta.outputs.image }}\`"
+            echo
+            echo "The API and the worker run this same image with different commands."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: build
+    uses: ./.github/workflows/deploy-template.yml
+    with:
+      environment: ${{ needs.build.outputs.environment }}
+      version: ${{ github.ref_name }}
+      image: ${{ needs.build.outputs.image }}
+    secrets: inherit

@@ -70,7 +70,8 @@ src/
 ├── auth/                          Better Auth instance, roles, active workspace
 ├── mail/                          transporter + templates
 ├── redis/  queue/                 connections and BullMQ queues
-├── modules/                       workspace, project, billing, usage, audit, admin, account
+├── ai/                            model catalogue + which providers have keys
+├── modules/                       workspace, project, model, billing, usage, audit, admin, account
 ├── jobs/                          job names + payload schemas
 └── workers/                       worker bootstrap + processors
 ```
@@ -114,7 +115,9 @@ GET    /v1/workspaces/:id/billing           plan, credits, seats
 GET    /v1/workspaces/:id/billing/transactions
 GET    /v1/workspaces/:id/usage             ?days=30 — spend by operation/provider/model
 GET    /v1/workspaces/:id/usage/records     ?projectId= &operation=
-GET    /v1/workspaces/:id/models            model catalogue, gated by plan tier
+GET    /v1/workspaces/:id/models            catalogue: configured, entitled, selectable
+GET    /v1/workspaces/:id/settings/models   chat + embedding model in use
+PUT    /v1/workspaces/:id/settings/models   owner | admin
 
 GET    /v1/admin/users                      platform admin only
 GET    /v1/admin/workspaces
@@ -123,6 +126,38 @@ POST   /v1/admin/workspaces/:id/credits     signed adjustment, audited
 PUT    /v1/admin/workspaces/:id/plan
 GET    /v1/admin/audit-log
 ```
+
+## CI and releases
+
+```text
+PR / push to main   →  check.yml            typecheck, build, OpenAPI, migration drift
+git tag v1.2.0      →  release.yml          check → build → ghcr.io/<owner>/ragenta-backend:v1.2.0 → production
+git tag v1.2.0rc1   →  release.yml          same, but → staging
+manual              →  deploy.yml           re-deploy or roll back any released tag
+```
+
+The tag shape is the only thing that picks the environment: an `rc` anywhere means staging,
+plain semver means production. Both `v1.2.0rc1` and `v1.2.0-rc.1` are accepted, matching the
+convention already used across the NYB repositories.
+
+Only the immutable version tag is published — no `latest`, no moving `staging` pointer. Rolling
+back is running `deploy.yml` on the previous tag (ADR-009).
+
+`deploy-template.yml` is the shared deploy: it SSHes to the VM, pins `IMAGE_TAG` in the
+environment's `.env`, pulls, runs `node dist/db/migrate.js` as an explicit step **before** the new
+containers start (ADR-003), brings the stack up and then requires `/health` to answer `ok`.
+
+Per-environment configuration lives in the GitHub Environment of the same name, so staging and
+production share variable names but never each other's host (ADR-010):
+
+| | |
+| --- | --- |
+| secrets | `SSH_HOST`, `SSH_USER`, `SSH_KEY` |
+| variables | `DEPLOY_PATH` — the directory holding `docker-compose.yml` |
+
+Until `SSH_HOST` is set for an environment the deploy **self-skips with a notice** rather than
+failing, so tagging a release works today, before any VM exists. The compose file it expects lives
+in `ragenta-deployment` and must name its services `api` and `worker`.
 
 ## Workspace == organization
 
@@ -141,6 +176,28 @@ carry both ids, so "which project spent the credits" is one query, not a second 
 Archiving is reversible and keeps history; permanent delete requires archiving first and is
 owner-only. Deleting a project nulls `usage_ledger.project_id` rather than removing the rows —
 billing history must stay complete.
+
+## Models
+
+Ragenta pays for inference and customers spend credits, so **provider API keys are server
+secrets** (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`) — there is no per-workspace
+credential anywhere in the schema, only a per-workspace *selection*.
+
+`src/ai/models.ts` is the single catalogue: what exists, what it does, its tier, and what the
+provider charges. `modules/usage/pricing.ts` reads the rates, `modules/model` reads the rest — so
+a model cannot be selectable without a price, or priced without being selectable.
+
+Two independent gates, both enforced in `modelService.assertSelectable`:
+
+- **configured** — does this deployment hold a key for that provider?
+- **entitled** — does the plan include that model's tier? (free = economy only)
+
+Resolution order for a chat request: project override → workspace default → built-in economy
+default. Entitlement is re-checked when resolving, not just when saving, so a workspace that
+downgrades stops using its premium model instead of quietly billing for it.
+
+The embedding model is a **default for new knowledge bases**, not a live switch — changing it
+cannot re-embed what is already indexed, so each knowledge base will freeze its own at creation.
 
 ## Credits and usage
 
@@ -211,7 +268,4 @@ Not built yet: the AI layer (`src/ai/`), per-workspace model/provider credential
 bases, documents, chat, agents, API keys. MinIO and Qdrant are in `docker-compose.yml` but have no
 client dependency until the ingestion module needs one.
 
-## auth-service/
 
-The reference implementation, cloned here for reading and **gitignored**. Never edit it, never
-commit it. See `CLAUDE.md` and `../.claude/rules/reference-repos.md`.

@@ -16,6 +16,11 @@ export const updateProjectSchema = z
 	.object({
 		name: z.string().trim().min(2).max(80).optional(),
 		description: z.string().trim().max(500).nullable().optional(),
+		/** Chat model override. `null` clears it and goes back to the workspace default. */
+		chat: z
+			.object({ provider: z.string().trim().min(1), model: z.string().trim().min(1) })
+			.nullable()
+			.optional(),
 	})
 	.refine((value) => Object.keys(value).length > 0, {
 		message: "Provide at least one field to update.",

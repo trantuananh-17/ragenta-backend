@@ -8,6 +8,13 @@
       "when": 1788016330971,
       "tag": "0000_puzzling_puff_adder",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788018284335,
+      "tag": "0001_soft_puma",
+      "breakpoints": true
     }
   ]
 }

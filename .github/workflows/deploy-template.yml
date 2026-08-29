@@ -1,0 +1,132 @@
+# Reusable deploy. Called by release.yml on a tag, and by deploy.yml for a
+# manual re-deploy or rollback.
+#
+# The target is a Linux VM running Docker Compose (ADR-008) — no Kubernetes, no
+# Helm, no Argo CD. The compose file itself lives in ragenta-deployment; this
+# workflow only tells the VM which image version to run.
+#
+# Configuration comes from the GitHub Environment named by `environment`, so
+# staging and production use the same variable names with different values and
+# neither can reach the other's host (ADR-010):
+#
+#   secrets   SSH_HOST   SSH_USER   SSH_KEY   (private key, no passphrase)
+#   vars      DEPLOY_PATH                     (directory holding docker-compose.yml)
+#
+# Until those are set the deploy self-skips with a notice instead of failing, so
+# tagging a release works before any VM exists.
+name: Deploy Template
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      image:
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    # Gives this job the environment's secrets and variables, and lets required
+    # reviewers gate production from the repository settings.
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Is this environment wired up?
+        id: target
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          if [ -z "$SSH_HOST" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No SSH_HOST configured for '${{ inputs.environment }}'. Image ${{ inputs.image }} was published; deploy skipped."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy over SSH
+        if: steps.target.outputs.ready == 'true'
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          # A deploy that hangs should fail, not hold the runner all day.
+          command_timeout: 15m
+          envs: IMAGE_TAG,DEPLOY_PATH
+          script_stops: true
+          script: |
+            set -euo pipefail
+            cd "$DEPLOY_PATH"
+
+            # Refuse rather than create one: the .env on the VM holds every
+            # secret this stack needs, and a deploy that quietly replaced it
+            # with a single line would take the environment down and look like
+            # it succeeded.
+            if [ ! -f .env ]; then
+              echo "::error::No .env in $DEPLOY_PATH. Provision the environment before deploying."
+              exit 1
+            fi
+
+            # The compose file reads IMAGE_TAG; rewriting it in .env leaves the
+            # VM able to run `docker compose up -d` by hand later on the same
+            # version this deploy pinned.
+            # `|| true` because grep exits 1 when it filters everything out,
+            # which under `set -e` would abort a perfectly valid deploy.
+            grep -v '^IMAGE_TAG=' .env > .env.next || true
+            echo "IMAGE_TAG=$IMAGE_TAG" >> .env.next
+            mv .env.next .env
+
+            docker compose pull
+
+            # Migrations are an explicit step BEFORE the new containers start,
+            # never a container entrypoint side effect (ADR-003). They are
+            # expand-only, so the currently running version keeps working across
+            # this window.
+            docker compose run --rm api node dist/db/migrate.js
+
+            docker compose up -d
+            docker compose ps
+        env:
+          IMAGE_TAG: ${{ inputs.version }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+
+      - name: Health check
+        if: steps.target.outputs.ready == 'true'
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script_stops: true
+          script: |
+            set -euo pipefail
+            # Give the API a moment to bind, then require a healthy answer.
+            # Failing here is the signal to roll back to the previous tag.
+            for attempt in $(seq 1 10); do
+              if curl -fsS http://localhost:8080/health | grep -q '"status":"ok"'; then
+                echo "Healthy after ${attempt} attempt(s)."
+                exit 0
+              fi
+              sleep 3
+            done
+            echo "::error::/health did not report ok. Roll back with the previous tag."
+            exit 1
+
+      - name: Summary
+        run: |
+          {
+            echo "### ${{ inputs.environment }}"
+            echo
+            echo "Version: \`${{ inputs.version }}\`"
+            echo "Image: \`${{ inputs.image }}\`"
+            if [ "${{ steps.target.outputs.ready }}" != "true" ]; then
+              echo
+              echo "Deploy skipped — this environment has no \`SSH_HOST\` secret yet."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

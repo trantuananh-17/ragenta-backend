@@ -1,6 +1,7 @@
 import { ConflictError, NotFoundError, ValidationError } from "../../shared/errors"
 import { newId } from "../../shared/id"
 import { auditService } from "../audit/audit.service"
+import { modelService } from "../model/model.service"
 import { projectRepository } from "./project.repository"
 import type { CreateProjectInput, UpdateProjectInput } from "./project.dto"
 
@@ -74,9 +75,21 @@ export const projectService = {
 			throw new ValidationError("Restore the project before editing it.")
 		}
 
+		// Validated before it is stored, so a project can never hold a model the
+		// workspace is not entitled to or the deployment cannot call.
+		if (input.chat) {
+			await modelService.assertSelectable(workspaceId, input.chat, "chat")
+		}
+
 		const updated = await projectRepository.update(workspaceId, projectId, {
 			...(input.name !== undefined ? { name: input.name } : {}),
 			...(input.description !== undefined ? { description: input.description } : {}),
+			...(input.chat !== undefined
+				? {
+						chatProvider: input.chat?.provider ?? null,
+						chatModel: input.chat?.model ?? null,
+					}
+				: {}),
 		})
 		if (!updated) throw new NotFoundError("Project")
 
