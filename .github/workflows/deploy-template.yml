@@ -67,6 +67,21 @@ jobs:
             set -euo pipefail
             cd "$DEPLOY_PATH"
 
+            # The compose file lives in a clone of ragenta-deployment on this
+            # VM. Without pulling it, a release runs a new image against
+            # whatever compose file happened to already be on the host, and the
+            # two only disagree in ways nobody notices until something breaks.
+            # --ff-only, never a reset: a diverged clone means someone edited it
+            # in place, and that work is not ours to discard.
+            REPO_ROOT="$(git -C "$DEPLOY_PATH" rev-parse --show-toplevel 2>/dev/null || true)"
+            if [ -n "$REPO_ROOT" ]; then
+              git -C "$REPO_ROOT" fetch --prune origin
+              git -C "$REPO_ROOT" pull --ff-only
+              echo "Configuration at $(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+            else
+              echo "::notice::$DEPLOY_PATH is not a git clone; using the files already on the host."
+            fi
+
             # Refuse rather than create one: the .env on the VM holds every
             # secret this stack needs, and a deploy that quietly replaced it
             # with a single line would take the environment down and look like
@@ -81,8 +96,15 @@ jobs:
             # version this deploy pinned.
             # `|| true` because grep exits 1 when it filters everything out,
             # which under `set -e` would abort a perfectly valid deploy.
-            grep -v '^IMAGE_TAG=' .env > .env.next || true
+            #
+            # The umask and the chmod are not belt-and-braces: a shell redirect
+            # creates .env.next with the login's default mode, and `mv` then
+            # hands those permissions to a file holding every secret this
+            # environment has. Without them the first deploy silently turns a
+            # 0600 .env into a world-readable one.
+            ( umask 077; grep -v '^IMAGE_TAG=' .env > .env.next || true )
             echo "IMAGE_TAG=$IMAGE_TAG" >> .env.next
+            chmod 600 .env.next
             mv .env.next .env
 
             docker compose pull
