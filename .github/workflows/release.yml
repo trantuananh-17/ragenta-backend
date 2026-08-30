@@ -97,4 +97,9 @@ jobs:
       environment: ${{ needs.build.outputs.environment }}
       version: ${{ github.ref_name }}
       image: ${{ needs.build.outputs.image }}
+      # What this repository owns in the shared environment. Every other
+      # deployable declares its own, so releases here never move theirs.
+      tag_var: IMAGE_TAG_BACKEND
+      services: api worker
+      migrate_run: api node dist/db/migrate.js
     secrets: inherit

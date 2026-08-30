@@ -52,4 +52,9 @@ jobs:
       environment: ${{ inputs.environment }}
       version: ${{ inputs.version }}
       image: ${{ needs.resolve.outputs.image }}
+      # Must match release.yml, or a rollback would pin a different variable
+      # from the one the release wrote and change nothing.
+      tag_var: IMAGE_TAG_BACKEND
+      services: api worker
+      migrate_run: api node dist/db/migrate.js
     secrets: inherit
