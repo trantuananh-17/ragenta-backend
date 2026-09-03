@@ -26,11 +26,8 @@ import { AppError } from "../shared/errors"
 import { defaultWorkspaceId } from "./active-workspace"
 import { ac, roles } from "./permissions"
 
-const DEFAULT_TRUSTED_ORIGINS = [
-	"http://localhost:*",
-	"https://localhost:*",
-	"https://*.ragenta.com",
-]
+/** Localhost only, for the same reason as DEFAULT_ORIGINS in src/api/app.ts. */
+const DEFAULT_TRUSTED_ORIGINS = ["http://localhost:*", "https://localhost:*"]
 
 /**
  * Entitlement failures raised by our own services have to leave Better Auth's

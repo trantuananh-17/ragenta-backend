@@ -19,11 +19,14 @@ import { requestContext } from "./middleware/request-context"
 import { attachSession } from "./middleware/session"
 import type { AppEnv } from "./types"
 
-const DEFAULT_ORIGINS = [
-	"http://localhost:*",
-	"https://localhost:*",
-	"https://*.ragenta.com",
-]
+/**
+ * Deliberately localhost only. Staging and production are sibling hostnames
+ * under one registrable domain — staging-ragenta-frontend.ragenta.cloud next to
+ * ragenta-frontend.ragenta.cloud — so a `*.ragenta.cloud` default would let a
+ * page served by one environment make credentialed calls to the other. Every
+ * deployed origin is listed explicitly in TRUSTED_ORIGINS instead.
+ */
+const DEFAULT_ORIGINS = ["http://localhost:*", "https://localhost:*"]
 
 function wildcardToRegex(pattern: string) {
 	const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&")

@@ -48,7 +48,7 @@ const envSchema = z.object({
 	SMTP_PORT: z.coerce.number().int().positive().default(587),
 	SMTP_USER: z.string().optional(),
 	SMTP_PASSWORD: z.string().optional(),
-	SMTP_FROM_EMAIL: z.string().default("no-reply@ragenta.com"),
+	SMTP_FROM_EMAIL: z.string().default("no-reply@ragenta.cloud"),
 	SMTP_FROM_NAME: z.string().default("Ragenta"),
 
 	ADMIN_USER_IDS: z.string().default(""),
