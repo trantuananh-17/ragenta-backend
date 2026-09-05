@@ -108,7 +108,7 @@ export const promoService = {
 			},
 		})
 
-		return serialize(row)
+		return serialize(row, await promoRepository.findActor(actorId))
 	},
 
 	async setActive(promoCodeId: string, active: boolean, actorId: string) {
@@ -127,7 +127,11 @@ export const promoService = {
 			metadata: { code: row.code },
 		})
 
-		return serialize(row)
+		const [creator, editor] = await Promise.all([
+			row.createdBy ? promoRepository.findActor(row.createdBy) : undefined,
+			promoRepository.findActor(actorId),
+		])
+		return serialize(row, creator, editor)
 	},
 
 	/**

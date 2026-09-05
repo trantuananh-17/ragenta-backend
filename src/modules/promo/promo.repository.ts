@@ -43,6 +43,21 @@ export const promoRepository = {
 		return { items, total: totals?.value ?? 0 }
 	},
 
+	/**
+	 * Name and email of one actor. Used by the write paths so the row they return
+	 * carries the same attribution the list does — a response that says the code
+	 * was created by nobody, when the very next list says otherwise, is a bug
+	 * report waiting to be filed.
+	 */
+	async findActor(userId: string, executor: DbExecutor = db) {
+		const rows = await executor
+			.select({ name: user.name, email: user.email })
+			.from(user)
+			.where(eq(user.id, userId))
+			.limit(1)
+		return rows[0]
+	},
+
 	async findByCode(code: string, executor: DbExecutor = db) {
 		const rows = await executor
 			.select()
