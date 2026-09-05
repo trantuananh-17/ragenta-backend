@@ -22,6 +22,13 @@
       "when": 1788020074749,
       "tag": "0002_free_the_fallen",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788612400001,
+      "tag": "0003_famous_juggernaut",
+      "breakpoints": true
     }
   ]
 }

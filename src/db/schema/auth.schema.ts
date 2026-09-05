@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm"
-import { boolean, index, pgTable, text, timestamp } from "drizzle-orm/pg-core"
+import { boolean, index, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core"
 
 /**
  * Identity tables owned by Better Auth. Column names and types follow what the
@@ -52,6 +52,18 @@ export const account = pgTable(
 		id: text("id").primaryKey(),
 		accountId: text("account_id").notNull(),
 		providerId: text("provider_id").notNull(),
+		/**
+		 * Who vouches for `accountId`. Required by Better Auth 1.7, which scopes
+		 * account identity on `(issuer, accountId)` instead of on `providerId` —
+		 * two providers can hand out the same subject, and only the issuer tells
+		 * them apart.
+		 *
+		 * Values come from Better Auth itself, never from us: `local:credential`
+		 * for email/password, and `local:oauth:<providerId>` for a social provider
+		 * that declares no issuer of its own — which is every built-in one,
+		 * Google included.
+		 */
+		issuer: text("issuer").notNull(),
 		userId: text("user_id")
 			.notNull()
 			.references(() => user.id, { onDelete: "cascade" }),
@@ -67,7 +79,13 @@ export const account = pgTable(
 			.$onUpdate(() => new Date())
 			.notNull(),
 	},
-	(table) => [index("account_userId_idx").on(table.userId)],
+	(table) => [
+		index("account_userId_idx").on(table.userId),
+		// The identity constraint Better Auth 1.7 relies on: one row per subject
+		// per issuer. It is what stops a second sign-in from silently creating a
+		// duplicate account for someone who already has one.
+		uniqueIndex("account_issuer_accountId_uidx").on(table.issuer, table.accountId),
+	],
 )
 
 export const verification = pgTable(

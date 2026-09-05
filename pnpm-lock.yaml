@@ -12,7 +12,7 @@ importers:
         specifier: ^1.19.14
         version: 1.19.17(hono@4.13.5)
       better-auth:
-        specifier: ^1.6.25
+        specifier: 1.7.2
         version: 1.7.2(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@types/pg@8.23.1)(kysely@0.29.5)(pg@8.23.0))(pg@8.23.0)
       bullmq:
         specifier: ^5.63.0

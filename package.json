@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.19.14",
-    "better-auth": "^1.6.25",
+    "better-auth": "1.7.2",
     "bullmq": "^5.63.0",
     "dotenv": "^17.3.1",
     "drizzle-orm": "^0.45.2",
