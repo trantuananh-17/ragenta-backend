@@ -82,9 +82,18 @@ export const auth = betterAuth({
 		ipAddress: { ipAddressHeaders: ["x-forwarded-for"] },
 		// Only enable cross-subdomain cookies when a real domain is configured;
 		// on localhost a Domain attribute breaks the cookie entirely.
+		//
+		// A deployed environment needs one: Google redirects the browser straight
+		// to this API's hostname, bypassing the frontend proxy that makes every
+		// other call same-origin, so a host-only OAuth state cookie is never sent
+		// back and the callback fails as a state mismatch (ADR-022).
 		...(env.auth.cookieDomain
 			? { crossSubDomainCookies: { enabled: true, domain: env.auth.cookieDomain } }
 			: {}),
+		// Namespaces the cookie names, which is what keeps two environments under
+		// the shared domain from overwriting each other's sessions. env.ts refuses
+		// to start when a domain is set without one.
+		...(env.auth.cookiePrefix ? { cookiePrefix: env.auth.cookiePrefix } : {}),
 	},
 
 	rateLimit: {

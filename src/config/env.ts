@@ -18,6 +18,12 @@ const envSchema = z.object({
 
 	BETTER_AUTH_SECRET: z.string().min(32),
 	AUTH_COOKIE_DOMAIN: z.string().optional(),
+	/**
+	 * Namespaces this environment's cookie names. Required whenever
+	 * AUTH_COOKIE_DOMAIN is set, because the only Domain value that spans one
+	 * environment's hostnames spans the other's too — see cookiePrefix() below.
+	 */
+	AUTH_COOKIE_PREFIX: z.string().optional(),
 	GOOGLE_CLIENT_ID: z.string().optional(),
 	GOOGLE_CLIENT_SECRET: z.string().optional(),
 
@@ -133,6 +139,32 @@ function cookieDomain() {
 	return domain
 }
 
+/**
+ * Cookie names are what keep two environments apart once they share a Domain.
+ *
+ * Staging and production live under one registrable domain, so the only Domain
+ * value that reaches every staging hostname reaches production's as well
+ * (ADR-022). The browser will therefore offer this environment's cookies to the
+ * other one's hosts; distinct names are what make that harmless, because a
+ * session token is only read under the name its own environment issued.
+ *
+ * Refusing to start is deliberate. Sharing a Domain with a shared prefix looks
+ * like it works — right up to the moment signing in to staging silently
+ * replaces a production session under the same cookie name.
+ */
+function cookiePrefix() {
+	const prefix = raw.AUTH_COOKIE_PREFIX?.trim()
+	if (cookieDomain() && !prefix) {
+		throw new Error(
+			"Invalid environment configuration:\n" +
+				"  AUTH_COOKIE_PREFIX: required when AUTH_COOKIE_DOMAIN is set, so this " +
+				"environment's cookies cannot collide with another environment's under the " +
+				"shared domain.",
+		)
+	}
+	return prefix || undefined
+}
+
 export const env = {
 	nodeEnv: raw.NODE_ENV,
 	isProduction: raw.NODE_ENV === "production",
@@ -145,6 +177,7 @@ export const env = {
 	auth: {
 		secret: raw.BETTER_AUTH_SECRET,
 		cookieDomain: cookieDomain(),
+		cookiePrefix: cookiePrefix(),
 		google:
 			raw.GOOGLE_CLIENT_ID && raw.GOOGLE_CLIENT_SECRET
 				? { clientId: raw.GOOGLE_CLIENT_ID, clientSecret: raw.GOOGLE_CLIENT_SECRET }
