@@ -1,6 +1,12 @@
-import { DEFAULT_CHAT, DEFAULT_EMBEDDING, MODELS, findModel } from "../../ai/models"
+import {
+	configuredProviders,
+	findCatalogueModel,
+	hasAdapter,
+	isProviderConfigured,
+	listCatalogue,
+} from "../../ai/catalogue"
+import { DEFAULT_CHAT, DEFAULT_EMBEDDING } from "../../ai/models"
 import type { ModelCapability } from "../../ai/models"
-import { configuredProviders, isProviderConfigured } from "../../ai/providers"
 import { EntitlementError, ValidationError } from "../../shared/errors"
 import { auditService } from "../audit/audit.service"
 import { billingService } from "../billing/billing.service"
@@ -27,26 +33,36 @@ export interface ModelSelection {
  */
 export const modelService = {
 	async listModels(workspaceId: string) {
-		const plan = await billingService.getPlan(workspaceId)
+		const [plan, catalogue, configured] = await Promise.all([
+			billingService.getPlan(workspaceId),
+			listCatalogue(),
+			configuredProviders(),
+		])
 		const allowedTiers = planLimits(plan).modelTiers
+		const withKey = new Set(configured)
 
 		return {
 			plan,
-			configuredProviders: configuredProviders(),
-			models: MODELS.map((entry) => {
-				const configured = isProviderConfigured(entry.provider)
-				const entitled = allowedTiers.includes(entry.tier)
-				return {
-					provider: entry.provider,
-					model: entry.model,
-					capability: entry.capability,
-					tier: entry.tier,
-					contextWindow: entry.contextWindow,
-					configured,
-					entitled,
-					selectable: configured && entitled,
-				}
-			}),
+			configuredProviders: configured,
+			// A model an administrator switched off is not "not selectable", it is
+			// not on offer at all — leaving it in the list with a reason would only
+			// invite support questions about a model nobody may use.
+			models: catalogue
+				.filter((entry) => entry.enabled)
+				.map((entry) => {
+					const callable = withKey.has(entry.provider) && hasAdapter(entry.provider)
+					const entitled = allowedTiers.includes(entry.tier)
+					return {
+						provider: entry.provider,
+						model: entry.model,
+						capability: entry.capability,
+						tier: entry.tier,
+						contextWindow: entry.contextWindow,
+						configured: callable,
+						entitled,
+						selectable: callable && entitled,
+					}
+				}),
 		}
 	},
 
@@ -112,8 +128,8 @@ export const modelService = {
 		selection: ModelSelection,
 		capability: ModelCapability,
 	) {
-		const definition = findModel(selection.provider, selection.model)
-		if (!definition) {
+		const definition = await findCatalogueModel(selection.provider, selection.model)
+		if (!definition || !definition.enabled) {
 			throw new ValidationError(
 				`Unknown model ${selection.provider}/${selection.model}.`,
 				selection,
@@ -127,7 +143,14 @@ export const modelService = {
 			)
 		}
 
-		if (!isProviderConfigured(definition.provider)) {
+		if (!hasAdapter(definition.provider)) {
+			throw new ValidationError(
+				`This deployment has no client for the ${definition.provider} provider.`,
+				selection,
+			)
+		}
+
+		if (!(await isProviderConfigured(definition.provider))) {
 			throw new ValidationError(
 				`The ${definition.provider} provider is not configured on this deployment.`,
 				selection,

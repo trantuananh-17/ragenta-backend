@@ -1,4 +1,5 @@
 import "dotenv/config"
+import { Buffer } from "node:buffer"
 import { z } from "zod"
 
 /**
@@ -22,6 +23,33 @@ const envSchema = z.object({
 
 	DATABASE_URL: z.string().min(1),
 	REDIS_URL: z.string().min(1),
+
+	/**
+	 * Vector store for retrieval. Optional so an environment that only runs the
+	 * API and billing does not need one; knowledge-base endpoints refuse when it
+	 * is unset rather than failing halfway through an ingestion.
+	 */
+	QDRANT_URL: z.url().optional(),
+	QDRANT_API_KEY: z.string().optional(),
+
+	/** S3-compatible object storage for uploaded documents (MinIO in every environment so far). */
+	STORAGE_ENDPOINT: z.string().optional(),
+	STORAGE_PORT: z.coerce.number().int().positive().default(9000),
+	STORAGE_USE_SSL: z.enum(["true", "false"]).default("false"),
+	STORAGE_ACCESS_KEY: z.string().optional(),
+	STORAGE_SECRET_KEY: z.string().optional(),
+	STORAGE_BUCKET: z.string().default("ragenta-documents"),
+	STORAGE_REGION: z.string().default("us-east-1"),
+
+	/**
+	 * 32 bytes, base64. Encrypts provider API keys at rest. Without it the
+	 * platform still runs on the environment-variable keys below, but storing a
+	 * credential through the admin API is refused — writing a secret in the clear
+	 * because a key was missing is never the safer fallback.
+	 *
+	 * Generate with: openssl rand -base64 32
+	 */
+	SECRETS_ENCRYPTION_KEY: z.string().optional(),
 
 	/**
 	 * Ragenta pays for inference, so provider keys are server secrets. A provider
@@ -56,6 +84,22 @@ const envSchema = z.object({
 	/** Serve /v1/docs. Defaults to on outside production. */
 	DOCS_ENABLED: z.enum(["true", "false"]).optional(),
 })
+
+/**
+ * Decoded once at startup so a malformed key is a boot failure with a readable
+ * message, not a decrypt error the first time somebody opens the models screen.
+ */
+function encryptionKey(): Buffer | undefined {
+	const value = raw.SECRETS_ENCRYPTION_KEY?.trim()
+	if (!value) return undefined
+	const decoded = Buffer.from(value, "base64")
+	if (decoded.length !== 32) {
+		throw new Error(
+			`SECRETS_ENCRYPTION_KEY must be 32 bytes of base64, got ${decoded.length}. Generate with: openssl rand -base64 32`,
+		)
+	}
+	return decoded
+}
 
 function parseEnv() {
 	const parsed = envSchema.safeParse(process.env)
@@ -109,6 +153,25 @@ export const env = {
 
 	databaseUrl: raw.DATABASE_URL,
 	redisUrl: raw.REDIS_URL,
+
+	qdrant: raw.QDRANT_URL
+		? { url: raw.QDRANT_URL, apiKey: raw.QDRANT_API_KEY || undefined }
+		: undefined,
+
+	storage:
+		raw.STORAGE_ENDPOINT && raw.STORAGE_ACCESS_KEY && raw.STORAGE_SECRET_KEY
+			? {
+					endPoint: raw.STORAGE_ENDPOINT,
+					port: raw.STORAGE_PORT,
+					useSSL: raw.STORAGE_USE_SSL === "true",
+					accessKey: raw.STORAGE_ACCESS_KEY,
+					secretKey: raw.STORAGE_SECRET_KEY,
+					bucket: raw.STORAGE_BUCKET,
+					region: raw.STORAGE_REGION,
+				}
+			: undefined,
+
+	secretsEncryptionKey: encryptionKey(),
 
 	stripe:
 		raw.STRIPE_SECRET_KEY && raw.STRIPE_WEBHOOK_SECRET

@@ -4,8 +4,14 @@ import type { JobsOptions } from "bullmq"
 import { createRedisConnection } from "../redis/client"
 
 export const QUEUE_BILLING = "billing" as const
+/**
+ * Document ingestion. Its own queue rather than a name on the billing one:
+ * parsing and embedding are slow and bursty, and a backlog of them must not
+ * delay a credit refill behind it.
+ */
+export const QUEUE_INGESTION = "ingestion" as const
 
-export type QueueName = typeof QUEUE_BILLING
+export type QueueName = typeof QUEUE_BILLING | typeof QUEUE_INGESTION
 
 /**
  * Defaults every job inherits. Explicit rather than relying on BullMQ's, because

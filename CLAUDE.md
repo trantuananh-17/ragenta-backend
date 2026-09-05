@@ -46,6 +46,16 @@ routes → controller → service → repository → db
   is the only file that maps them to HTTP.
 - `src/config/env.ts` is the only reader of `process.env`.
 
+Three layers sit beside that stack rather than inside it, because both the API and the worker use
+them and neither is workspace-scoped:
+
+- `src/ai/` — provider clients (`clients/`, plain `fetch`, no SDKs), the merged catalogue
+  (`catalogue.ts`), embedding (`embed.ts`) and token estimation (`tokens.ts`).
+- `src/storage/objects.ts` — S3-compatible object storage. Keys are generated from a document id,
+  never from an uploaded filename.
+- `src/vector/qdrant.ts` — one collection per embedding width; every search and delete carries a
+  `workspaceId` filter (ADR-020).
+
 ## Adding an endpoint
 
 1. DTO in `<module>.dto.ts`.
@@ -72,3 +82,15 @@ routes → controller → service → repository → db
   never on boot. Expand first, contract in a later release.
 - Do not put product endpoints inside Better Auth plugins. That is what makes the reference
   service hard to layer, and this repo deliberately does the opposite.
+- **Provider keys are write-only.** `provider_credential.encrypted_key` is read by
+  `src/ai/catalogue.ts` and by nothing else. Every response carries `keyHint`, never the value, and
+  nothing logs or audits the key itself (ADR-021).
+- **A knowledge base freezes its embedding model.** Vectors from two models are not comparable, so
+  changing it would return nonsense rather than degrade. Re-embedding is an explicit re-index.
+- **Retrieval never runs unfiltered.** `searchChunks` takes the workspace id as a required
+  argument and puts it in the Qdrant filter. Do not add a code path that does not.
+- **Ingestion runs in the worker.** Parsing a PDF and calling an embedding provider takes tens of
+  seconds; an HTTP request that does it times out behind the proxy and leaves a half-indexed
+  document nobody knows about.
+- **Retrieved document text is untrusted.** It is data in a prompt, never instructions. The system
+  prompt in `src/modules/chat/prompt.ts` says so; keep it saying so.

@@ -1,26 +1,24 @@
 import type { ModelTier } from "../modules/billing/plans"
 
 /**
- * The model catalogue: what exists, what it can do, which plan tier it belongs
- * to, and what the provider charges for it.
+ * The built-in model catalogue: what exists, what it can do, which plan tier it
+ * belongs to, and what the provider charges for it.
  *
- * One table, two readers — `modules/usage/pricing.ts` turns the rates into
- * credits, `modules/model` decides what a workspace may select. Keeping them in
- * one place is deliberate: a model that can be picked but has no price, or has a
- * price but cannot be picked, is a billing hole.
+ * This list ships with the code so a fresh database is usable before anybody
+ * opens the admin console. It is not the whole catalogue any more — a
+ * `provider_model` row with the same `(provider, model)` key replaces the entry
+ * here, and a row with a new key adds one. `src/ai/catalogue.ts` performs that
+ * merge and is what every reader should call; this module is the seed.
  *
- * Ragenta holds the provider keys and customers spend credits, so there is no
- * per-workspace credential anywhere in the system — only a per-workspace
- * *selection* from this list.
+ * Two readers of the merged result — `modules/usage/pricing.ts` turns rates into
+ * credits, `modules/model` decides what a workspace may select. Keeping them
+ * fed from one place is deliberate: a model that can be picked but has no price,
+ * or has a price but cannot be picked, is a billing hole.
  */
-export type ProviderName = "openai" | "anthropic" | "google"
-
-export const PROVIDERS: ProviderName[] = ["openai", "anthropic", "google"]
-
 export type ModelCapability = "chat" | "embedding"
 
 export interface ModelDefinition {
-	provider: ProviderName
+	provider: string
 	model: string
 	capability: ModelCapability
 	tier: ModelTier
@@ -28,6 +26,12 @@ export interface ModelDefinition {
 	rates: { input: number; output: number; embedding: number }
 	/** Context window in tokens, for the model picker. */
 	contextWindow?: number
+	/**
+	 * Vector width, embedding models only. It selects the Qdrant collection a
+	 * knowledge base indexes into, so a wrong number here fails indexing outright
+	 * rather than quietly degrading retrieval.
+	 */
+	embeddingDimensions?: number
 }
 
 export const MODELS: ModelDefinition[] = [
@@ -95,6 +99,7 @@ export const MODELS: ModelDefinition[] = [
 		capability: "embedding",
 		tier: "economy",
 		rates: { input: 0, output: 0, embedding: 0.02 },
+		embeddingDimensions: 1536,
 	},
 	{
 		provider: "openai",
@@ -102,6 +107,15 @@ export const MODELS: ModelDefinition[] = [
 		capability: "embedding",
 		tier: "economy",
 		rates: { input: 0, output: 0, embedding: 0.13 },
+		embeddingDimensions: 3072,
+	},
+	{
+		provider: "google",
+		model: "gemini-embedding-001",
+		capability: "embedding",
+		tier: "economy",
+		rates: { input: 0, output: 0, embedding: 0.15 },
+		embeddingDimensions: 3072,
 	},
 ]
 
@@ -112,12 +126,6 @@ export const DEFAULT_EMBEDDING = {
 	model: "text-embedding-3-small",
 } as const
 
-const BY_KEY = new Map(MODELS.map((entry) => [`${entry.provider}:${entry.model}`, entry]))
-
-export function findModel(provider: string, model: string): ModelDefinition | undefined {
-	return BY_KEY.get(`${provider}:${model}`)
-}
-
-export function isProviderName(value: string): value is ProviderName {
-	return (PROVIDERS as string[]).includes(value)
+export function modelKey(provider: string, model: string): string {
+	return `${provider}:${model}`
 }

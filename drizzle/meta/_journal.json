@@ -29,6 +29,27 @@
       "when": 1788612400001,
       "tag": "0003_famous_juggernaut",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788618782139,
+      "tag": "0004_handy_synch",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788619062933,
+      "tag": "0005_red_susan_delgado",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788619654571,
+      "tag": "0006_wet_leopardon",
+      "breakpoints": true
     }
   ]
 }

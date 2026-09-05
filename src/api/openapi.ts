@@ -5,7 +5,28 @@ import { auth } from "../auth/auth"
 import { env } from "../config/env"
 import { adjustCreditsSchema, adminListQuerySchema, setPlanSchema } from "../modules/admin/admin.dto"
 import { createCheckoutSchema, updateAutoReloadSchema } from "../modules/billing/billing.dto"
+import {
+	createConversationSchema,
+	sendMessageSchema,
+	updateConversationSchema,
+} from "../modules/chat/chat.dto"
+import {
+	createKnowledgeBaseSchema,
+	updateKnowledgeBaseSchema,
+} from "../modules/knowledge/knowledge.dto"
 import { updateModelSettingsSchema } from "../modules/model/model.dto"
+import {
+	patchModelSchema,
+	saveCredentialSchema,
+	setPlatformDefaultsSchema,
+	upsertModelSchema,
+} from "../modules/provider/provider.dto"
+import {
+	createPromoCodeSchema,
+	listPromoCodesQuerySchema,
+	redeemPromoCodeSchema,
+	updatePromoCodeSchema,
+} from "../modules/promo/promo.dto"
 import {
 	createProjectSchema,
 	listProjectsQuerySchema,
@@ -254,6 +275,224 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		tags: ["Admin"],
 		access: "platform admin",
 		query: paginationQuerySchema,
+	},
+
+	"GET /v1/admin/promo-codes": {
+		summary: "List promo codes, newest first",
+		tags: ["Admin"],
+		access: "platform admin",
+		query: listPromoCodesQuerySchema,
+	},
+	"POST /v1/admin/promo-codes": {
+		summary: "Create a promo code",
+		tags: ["Admin"],
+		access: "platform admin",
+		body: createPromoCodeSchema,
+		status: 201,
+	},
+	"PATCH /v1/admin/promo-codes/:promoCodeId": {
+		summary: "Enable or disable a promo code — the only mutable field",
+		tags: ["Admin"],
+		access: "platform admin",
+		body: updatePromoCodeSchema,
+	},
+	"DELETE /v1/admin/promo-codes/:promoCodeId": {
+		summary: "Delete a code nobody redeemed. Refused with 409 once one has",
+		tags: ["Admin"],
+		access: "platform admin",
+		status: 204,
+	},
+	"GET /v1/admin/promo-codes/:promoCodeId/redemptions": {
+		summary: "Which workspaces redeemed a code",
+		tags: ["Admin"],
+		access: "platform admin",
+		query: paginationQuerySchema,
+	},
+
+	"GET /v1/workspaces/:workspaceId/knowledge-bases": {
+		summary: "List knowledge bases",
+		tags: ["Knowledge"],
+		access: "any member",
+		query: paginationQuerySchema,
+	},
+	"POST /v1/workspaces/:workspaceId/knowledge-bases": {
+		summary:
+			"Create a knowledge base. Its embedding model is frozen at creation — vectors from two models are not comparable",
+		tags: ["Knowledge"],
+		access: "owner, admin, member",
+		body: createKnowledgeBaseSchema,
+		status: 201,
+	},
+	"GET /v1/workspaces/:workspaceId/knowledge-bases/:baseId": {
+		summary: "Knowledge base detail with document and chunk counts",
+		tags: ["Knowledge"],
+		access: "any member",
+	},
+	"PATCH /v1/workspaces/:workspaceId/knowledge-bases/:baseId": {
+		summary: "Rename or re-describe a knowledge base",
+		tags: ["Knowledge"],
+		access: "owner, admin, member",
+		body: updateKnowledgeBaseSchema,
+	},
+	"DELETE /v1/workspaces/:workspaceId/knowledge-bases/:baseId": {
+		summary: "Delete it and everything derived from it — vectors, objects and rows",
+		tags: ["Knowledge"],
+		access: "owner, admin",
+		status: 204,
+	},
+	"GET /v1/workspaces/:workspaceId/knowledge-bases/:baseId/documents": {
+		summary: "List documents with their ingestion status",
+		tags: ["Knowledge"],
+		access: "any member",
+		query: paginationQuerySchema,
+	},
+	"POST /v1/workspaces/:workspaceId/knowledge-bases/:baseId/documents": {
+		summary:
+			"Upload a document as multipart/form-data under `file`. Returns the pending row; indexing runs in the worker",
+		tags: ["Knowledge"],
+		access: "owner, admin, member",
+		status: 201,
+	},
+	"GET /v1/workspaces/:workspaceId/documents/:documentId": {
+		summary: "Document detail and why it failed, if it did",
+		tags: ["Knowledge"],
+		access: "any member",
+	},
+	"GET /v1/workspaces/:workspaceId/documents/:documentId/download": {
+		summary: "A short-lived presigned URL for the original file",
+		tags: ["Knowledge"],
+		access: "any member",
+	},
+	"GET /v1/workspaces/:workspaceId/documents/:documentId/chunks": {
+		summary: "The passages a document was split into",
+		tags: ["Knowledge"],
+		access: "any member",
+		query: paginationQuerySchema,
+	},
+	"POST /v1/workspaces/:workspaceId/documents/:documentId/reindex": {
+		summary: "Queue the document again. Re-embedding costs credits",
+		tags: ["Knowledge"],
+		access: "owner, admin, member",
+	},
+	"DELETE /v1/workspaces/:workspaceId/documents/:documentId": {
+		summary: "Delete a document, its chunks, its vectors and its stored file",
+		tags: ["Knowledge"],
+		access: "owner, admin, member",
+		status: 204,
+	},
+
+	"GET /v1/workspaces/:workspaceId/conversations": {
+		summary: "List conversations, most recent first",
+		tags: ["Chat"],
+		access: "any member",
+		query: paginationQuerySchema,
+	},
+	"POST /v1/workspaces/:workspaceId/conversations": {
+		summary: "Start a conversation. A null knowledgeBaseId answers without retrieval",
+		tags: ["Chat"],
+		access: "owner, admin, member",
+		body: createConversationSchema,
+		status: 201,
+	},
+	"GET /v1/workspaces/:workspaceId/conversations/:conversationId": {
+		summary: "Conversation detail",
+		tags: ["Chat"],
+		access: "any member",
+	},
+	"PATCH /v1/workspaces/:workspaceId/conversations/:conversationId": {
+		summary: "Rename a conversation or point it at another knowledge base",
+		tags: ["Chat"],
+		access: "owner, admin, member",
+		body: updateConversationSchema,
+	},
+	"DELETE /v1/workspaces/:workspaceId/conversations/:conversationId": {
+		summary: "Delete a conversation and its messages",
+		tags: ["Chat"],
+		access: "owner, admin, member",
+		status: 204,
+	},
+	"GET /v1/workspaces/:workspaceId/conversations/:conversationId/messages": {
+		summary: "The transcript, oldest first, with the citations each answer used",
+		tags: ["Chat"],
+		access: "any member",
+		query: paginationQuerySchema,
+	},
+	"POST /v1/workspaces/:workspaceId/conversations/:conversationId/messages": {
+		summary: "Ask a question and wait for the whole answer",
+		tags: ["Chat"],
+		access: "owner, admin, member",
+		body: sendMessageSchema,
+		status: 201,
+	},
+	"POST /v1/workspaces/:workspaceId/conversations/:conversationId/messages/stream": {
+		summary:
+			"The same turn over SSE. Events: citations, delta, done, error. Refusals arrive as a status code before the stream opens",
+		tags: ["Chat"],
+		access: "owner, admin, member",
+		body: sendMessageSchema,
+	},
+
+	"GET /v1/admin/providers": {
+		summary: "Providers, credential state (masked) and the merged model catalogue",
+		tags: ["Admin"],
+		access: "platform admin",
+	},
+	"PUT /v1/admin/providers/:provider/credential": {
+		summary: "Store a provider API key. Encrypted at rest and never returned",
+		tags: ["Admin"],
+		access: "platform admin",
+		body: saveCredentialSchema,
+	},
+	"DELETE /v1/admin/providers/:provider/credential": {
+		summary: "Remove a provider API key",
+		tags: ["Admin"],
+		access: "platform admin",
+	},
+	"POST /v1/admin/providers/:provider/check": {
+		summary: "Call the provider with the stored key. Answers 200 with ok=false on rejection",
+		tags: ["Admin"],
+		access: "platform admin",
+	},
+	"POST /v1/admin/models": {
+		summary: "Add a model or replace its definition",
+		tags: ["Admin"],
+		access: "platform admin",
+		body: upsertModelSchema,
+		status: 201,
+	},
+	"PATCH /v1/admin/providers/:provider/models/:model": {
+		summary: "Change one field of a model, built-in models included",
+		tags: ["Admin"],
+		access: "platform admin",
+		body: patchModelSchema,
+	},
+	"DELETE /v1/admin/providers/:provider/models/:model": {
+		summary: "Drop the stored row. A built-in model reverts to its compiled definition",
+		tags: ["Admin"],
+		access: "platform admin",
+	},
+	"GET /v1/admin/settings/models": {
+		summary: "Platform default chat and embedding models",
+		tags: ["Admin"],
+		access: "platform admin",
+	},
+	"PUT /v1/admin/settings/models": {
+		summary: "Change the platform defaults",
+		tags: ["Admin"],
+		access: "platform admin",
+		body: setPlatformDefaultsSchema,
+	},
+
+	"GET /v1/workspaces/:workspaceId/billing/promo-codes": {
+		summary: "Promo codes this workspace has redeemed",
+		tags: ["Billing"],
+		access: "any member",
+	},
+	"POST /v1/workspaces/:workspaceId/billing/promo-codes/redeem": {
+		summary: "Redeem a promo code for this workspace",
+		tags: ["Billing"],
+		access: "owner, admin",
+		body: redeemPromoCodeSchema,
 	},
 }
 

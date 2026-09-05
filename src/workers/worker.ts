@@ -2,15 +2,23 @@ import { Worker } from "bullmq"
 import type { Job } from "bullmq"
 
 import { JOB_SCAN_AUTO_RELOAD, JOB_SCAN_PLAN_REFILLS } from "../jobs/billing.jobs"
-import { QUEUE_BILLING, getQueue } from "../queue/queues"
+import { QUEUE_BILLING, QUEUE_INGESTION, getQueue } from "../queue/queues"
 import { createRedisConnection } from "../redis/client"
 import { logger } from "../shared/logger"
 import { processBillingJob } from "./processors/billing.processor"
+import { processIngestionJob } from "./processors/ingestion.processor"
 
 const log = logger.child({ component: "worker" })
 
 /** Concurrent jobs per worker process. Raise it per queue when work is IO-bound. */
 const CONCURRENCY = 5
+
+/**
+ * Lower than the billing queue on purpose. An ingestion holds a whole document
+ * in memory while it parses and embeds it, so concurrency here is a memory
+ * ceiling as much as a throughput setting.
+ */
+const INGESTION_CONCURRENCY = 2
 
 export function startWorkers(): Worker[] {
 	const billingWorker = new Worker(
@@ -32,7 +40,26 @@ export function startWorkers(): Worker[] {
 		log.info("job.completed", { queue: QUEUE_BILLING, jobId: job.id, jobName: job.name })
 	})
 
-	return [billingWorker]
+	const ingestionWorker = new Worker(
+		QUEUE_INGESTION,
+		async (job: Job) => processIngestionJob(job),
+		{ connection: createRedisConnection(), concurrency: INGESTION_CONCURRENCY },
+	)
+
+	ingestionWorker.on("failed", (job, error) => {
+		log.error("job.failed", error, {
+			queue: QUEUE_INGESTION,
+			jobId: job?.id,
+			jobName: job?.name,
+			attempt: job?.attemptsMade,
+		})
+	})
+
+	ingestionWorker.on("completed", (job) => {
+		log.info("job.completed", { queue: QUEUE_INGESTION, jobId: job.id, jobName: job.name })
+	})
+
+	return [billingWorker, ingestionWorker]
 }
 
 /**

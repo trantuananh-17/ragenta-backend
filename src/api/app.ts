@@ -4,13 +4,18 @@ import { cors } from "hono/cors"
 import { auth } from "../auth/auth"
 import { env } from "../config/env"
 import { checkDatabaseConnection } from "../db/client"
+import { checkStorage, isStorageConfigured } from "../storage/objects"
+import { checkVectorStore, isVectorStoreConfigured } from "../vector/qdrant"
 import { accountRoutes } from "../modules/account/account.routes"
 import { adminRoutes } from "../modules/admin/admin.routes"
 import { billingRoutes } from "../modules/billing/billing.routes"
+import { chatRoutes } from "../modules/chat/chat.routes"
+import { knowledgeRoutes } from "../modules/knowledge/knowledge.routes"
 import { planRoutes } from "../modules/billing/plan.routes"
 import { webhookRoutes } from "../modules/billing/webhook.routes"
 import { modelRoutes } from "../modules/model/model.routes"
 import { projectRoutes } from "../modules/project/project.routes"
+import { promoRoutes } from "../modules/promo/promo.routes"
 import { usageRoutes } from "../modules/usage/usage.routes"
 import { workspaceRoutes } from "../modules/workspace/workspace.routes"
 import { errorHandler } from "./middleware/error-handler"
@@ -53,10 +58,27 @@ export function createApp() {
 		}),
 	)
 
+	/**
+	 * Only the database decides the status code. Qdrant and object storage are
+	 * reported because an operator needs to see them, but a vector store that is
+	 * down must not take the container out of rotation — sign-in, billing and
+	 * every workspace screen still work, and restarting the API would not bring
+	 * Qdrant back.
+	 */
 	app.get("/health", async (c) => {
-		const database = await checkDatabaseConnection()
+		const [database, vectors, storage] = await Promise.all([
+			checkDatabaseConnection(),
+			checkVectorStore(),
+			checkStorage(),
+		])
 		return c.json(
-			{ status: database ? "ok" : "degraded", database, time: new Date().toISOString() },
+			{
+				status: database ? "ok" : "degraded",
+				database,
+				vectors: isVectorStoreConfigured() ? vectors : "not_configured",
+				storage: isStorageConfigured() ? storage : "not_configured",
+				time: new Date().toISOString(),
+			},
 			database ? 200 : 503,
 		)
 	})
@@ -80,6 +102,9 @@ export function createApp() {
 	app.route("/v1/workspaces", billingRoutes)
 	app.route("/v1/workspaces", usageRoutes)
 	app.route("/v1/workspaces", modelRoutes)
+	app.route("/v1/workspaces", promoRoutes)
+	app.route("/v1/workspaces", knowledgeRoutes)
+	app.route("/v1/workspaces", chatRoutes)
 	app.route("/v1/admin", adminRoutes)
 
 	// Registered last so the document sees every route above it. Off in

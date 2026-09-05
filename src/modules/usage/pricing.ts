@@ -1,4 +1,4 @@
-import { findModel } from "../../ai/models"
+import { findCatalogueModel } from "../../ai/catalogue"
 import type { ModelTier } from "../billing/plans"
 
 /**
@@ -16,6 +16,11 @@ import type { ModelTier } from "../billing/plans"
  * the usage row with the `pricingVersion` that produced it (ADR-013). Changing a
  * rate never restates what a workspace was already charged, so bump
  * `PRICING_VERSION` whenever one moves.
+ *
+ * Rates now come from the merged catalogue, so a rate edited in the admin
+ * console prices the very next call. That makes `PRICING_VERSION` a coarser
+ * signal than it was — it still marks changes to *this file*, and the frozen
+ * `credits` column remains the record of what was actually charged.
  */
 export const PRICING_VERSION = "2026-08-29" as const
 
@@ -40,8 +45,12 @@ export interface PricedUsage {
 	pricingVersion: string
 }
 
-export function priceUsage(provider: string, model: string, tokens: TokenCounts): PricedUsage {
-	const rates = findModel(provider, model)?.rates ?? DEFAULT_RATES
+export async function priceUsage(
+	provider: string,
+	model: string,
+	tokens: TokenCounts,
+): Promise<PricedUsage> {
+	const rates = (await findCatalogueModel(provider, model))?.rates ?? DEFAULT_RATES
 
 	const usd =
 		((tokens.inputTokens ?? 0) * rates.input +
@@ -56,6 +65,6 @@ export function priceUsage(provider: string, model: string, tokens: TokenCounts)
 	return { credits, pricingVersion: PRICING_VERSION }
 }
 
-export function modelTier(provider: string, model: string): ModelTier {
-	return findModel(provider, model)?.tier ?? DEFAULT_TIER
+export async function modelTier(provider: string, model: string): Promise<ModelTier> {
+	return (await findCatalogueModel(provider, model))?.tier ?? DEFAULT_TIER
 }

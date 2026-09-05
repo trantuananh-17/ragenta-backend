@@ -7,7 +7,7 @@ import { page } from "../../shared/pagination"
 import { billingService } from "../billing/billing.service"
 import type { CreditSource } from "../billing/billing.service"
 import { planLimits } from "../billing/plans"
-import { modelTier, priceUsage } from "./pricing"
+import { priceUsage } from "./pricing"
 import { usageRepository } from "./usage.repository"
 import type { UsageFilter } from "./usage.repository"
 
@@ -56,7 +56,11 @@ export const usageService = {
 	 * refusing up front.
 	 */
 	async recordAndCharge(input: RecordUsageInput) {
-		const { credits, pricingVersion } = priceUsage(input.provider, input.model, input)
+		const { credits, pricingVersion } = await priceUsage(
+			input.provider,
+			input.model,
+			input,
+		)
 
 		return db.transaction(async (tx) => {
 			// A rounding-to-zero charge still records the usage: the tokens were

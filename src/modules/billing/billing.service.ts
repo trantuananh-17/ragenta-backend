@@ -52,7 +52,7 @@ export interface GrantInput {
 	workspaceId: string
 	amount: number
 	bucket: "plan" | "topup"
-	kind: "topup" | "admin_adjust" | "refund" | "signup_grant"
+	kind: "topup" | "admin_adjust" | "refund" | "signup_grant" | "promo"
 	reference: string
 	actorId?: string
 	reason?: string
@@ -234,63 +234,71 @@ export const billingService = {
 
 	/** Adds credit to one bucket. Audited in the same transaction as the ledger row. */
 	async grant(input: GrantInput) {
+		return db.transaction((tx) => this.grantWithin(tx, input))
+	},
+
+	/**
+	 * The grant itself, inside a transaction the caller owns. Promo redemption
+	 * uses it so claiming the code and moving the credit commit together — a
+	 * redemption row without its credits would be unrecoverable, because the
+	 * unique index would then refuse the retry.
+	 */
+	async grantWithin(tx: Transaction, input: GrantInput) {
 		if (!(input.amount > 0)) {
 			throw new ValidationError("Grant amount must be greater than zero.")
 		}
 
-		return db.transaction(async (tx) => {
-			const balance = await billingRepository.lockBalance(input.workspaceId, tx)
-			if (!balance) throw new NotFoundError("Credit balance")
+		const balance = await billingRepository.lockBalance(input.workspaceId, tx)
+		if (!balance) throw new NotFoundError("Credit balance")
 
-			const inserted = await billingRepository.insertTransaction(
-				{
-					id: newId(),
-					organizationId: input.workspaceId,
-					kind: input.kind,
-					bucket: input.bucket,
-					amount: toAmount(input.amount),
-					reference: input.reference,
-					source: input.kind === "admin_adjust" ? "admin" : null,
-				},
-				tx,
-			)
-
-			if (!inserted) {
-				return {
-					granted: 0,
-					alreadyApplied: true,
-					planCredits: toNumber(balance.planCredits),
-					topupCredits: toNumber(balance.topupCredits),
-				}
-			}
-
-			const planCredits =
-				toNumber(balance.planCredits) + (input.bucket === "plan" ? input.amount : 0)
-			const topupCredits =
-				toNumber(balance.topupCredits) + (input.bucket === "topup" ? input.amount : 0)
-
-			await billingRepository.setBalance(
-				input.workspaceId,
-				{ planCredits: toAmount(planCredits), topupCredits: toAmount(topupCredits) },
-				tx,
-			)
-
-			await auditService.recordWithin(tx, {
-				action: "billing.credits.granted",
-				actorId: input.actorId ?? null,
+		const inserted = await billingRepository.insertTransaction(
+			{
+				id: newId(),
 				organizationId: input.workspaceId,
-				targetType: "credit_balance",
-				targetId: input.workspaceId,
-				metadata: {
-					amount: input.amount,
-					bucket: input.bucket,
-					kind: input.kind,
-					reason: input.reason ?? null,
-				},
-			})
+				kind: input.kind,
+				bucket: input.bucket,
+				amount: toAmount(input.amount),
+				reference: input.reference,
+				source: input.kind === "admin_adjust" ? "admin" : null,
+			},
+			tx,
+		)
 
-			return { granted: input.amount, alreadyApplied: false, planCredits, topupCredits }
+		if (!inserted) {
+			return {
+				granted: 0,
+				alreadyApplied: true,
+				planCredits: toNumber(balance.planCredits),
+				topupCredits: toNumber(balance.topupCredits),
+			}
+		}
+
+		const planCredits =
+			toNumber(balance.planCredits) + (input.bucket === "plan" ? input.amount : 0)
+		const topupCredits =
+			toNumber(balance.topupCredits) + (input.bucket === "topup" ? input.amount : 0)
+
+		await billingRepository.setBalance(
+			input.workspaceId,
+			{ planCredits: toAmount(planCredits), topupCredits: toAmount(topupCredits) },
+			tx,
+		)
+
+		await auditService.recordWithin(tx, {
+			action: "billing.credits.granted",
+			actorId: input.actorId ?? null,
+			organizationId: input.workspaceId,
+			targetType: "credit_balance",
+			targetId: input.workspaceId,
+			metadata: {
+				amount: input.amount,
+				bucket: input.bucket,
+				kind: input.kind,
+				reason: input.reason ?? null,
+			},
 		})
+
+		return { granted: input.amount, alreadyApplied: false, planCredits, topupCredits }
 	},
 
 	/**
