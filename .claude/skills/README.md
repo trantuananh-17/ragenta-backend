@@ -1,8 +1,7 @@
 # Vendored skills
 
 These are **not ours**. They come verbatim from the public
-[`better-auth/skills`](https://github.com/better-auth/skills) repository and were carried over
-from the `auth-service` reference before it was removed from this working tree.
+[`better-auth/skills`](https://github.com/better-auth/skills) repository.
 
 Do not edit them in place — a local change is silently lost the next time they are refreshed from
 upstream, and it makes their provenance a lie. If Ragenta needs different guidance, write a

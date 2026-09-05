@@ -16,16 +16,9 @@ pnpm db:migrate
 
 No test suite yet. `docker compose up -d` starts postgres and redis for local work.
 
-## The auth-service reference is gone
+## Vendored Better Auth skills
 
-It was removed on 2026-08-29 once Stripe — the last thing worth taking — had been ported. It lives
-at `https://github.com/NYB-AI/auth-service`, last read at `134c6fe`.
-
-`.gitignore` still excludes `auth-service/`, so re-cloning it here to check something is safe and
-can never reach a commit. If you do, it stays **read-only**: never edit, stage or commit inside it
-(`../.claude/rules/reference-repos.md`).
-
-Its Better Auth skills were kept in `.claude/skills/`. They are third-party — do not edit them in
+`.claude/skills/` holds third-party Better Auth skills. They are not ours — do not edit them in
 place; write a Ragenta skill beside them instead.
 
 ## Layer rules
