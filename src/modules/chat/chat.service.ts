@@ -3,7 +3,7 @@ import { chatCapableClient } from "../../ai/clients"
 import type { ChatCapableClient, ChatMessage, TokenUsage } from "../../ai/clients"
 import { estimateTokens } from "../../ai/tokens"
 import type { MessageCitation } from "../../db/schema"
-import { EntitlementError, NotFoundError, ValidationError } from "../../shared/errors"
+import { EntitlementError, NotFoundError, ValidationError, isAppError } from "../../shared/errors"
 import { newId } from "../../shared/id"
 import { logger } from "../../shared/logger"
 import type { PaginationQuery } from "../../shared/pagination"
@@ -64,21 +64,35 @@ const STOP_POLL_MS = 300
  */
 export interface PreparedTurn {
 	conversation: ConversationRow & { additionalKnowledgeBaseIds: string[] }
-	/** Charged with the turn, when a reranker ran. Null when none was configured. */
-	rerankUsage: RetrievalOutcome["rerankUsage"]
 	/** Narrowed at `prepareTurn`: a provider with no chat adapter is refused there. */
 	client: ChatCapableClient
 	selection: { provider: string; model: string }
-	messages: ChatMessage[]
-	citations: MessageCitation[]
+	/** Carried through because retrieval now runs inside the stream, not before it. */
+	input: SendMessageInput
 	userMessageId: string
 	assistantMessageId: string
 	actorId: string
 }
 
+/** Retrieval and prompt assembly, which happen after the stream has opened. */
+interface TurnContext {
+	messages: ChatMessage[]
+	citations: MessageCitation[]
+	rerankUsage: RetrievalOutcome["rerankUsage"]
+}
+
 export type ChatStreamEvent =
 	/** Sent before any token, so the client can ask for this turn to stop. */
 	| { type: "start"; messageId: string }
+	/**
+	 * Which part of the turn is running.
+	 *
+	 * Retrieval and reranking happen before a single token exists and take
+	 * seconds on a large base, so without this the client has nothing to show but
+	 * a spinner that means "something". It is one frame per phase, not progress:
+	 * neither search nor generation knows how far along it is.
+	 */
+	| { type: "phase"; phase: "retrieving" | "generating" }
 	| { type: "citations"; citations: MessageCitation[] }
 	| { type: "delta"; text: string }
 	| {
@@ -272,6 +286,82 @@ export const chatService = {
 	): Promise<PreparedTurn> {
 		const conversation = await this.getConversation(workspaceId, conversationId)
 
+		const assistantMessageId = newId()
+		/**
+		 * The question is written before anything that can refuse the turn.
+		 *
+		 * Every refusal below — no credits, a model outside the plan, a knowledge
+		 * base that has been deleted — used to throw ahead of this insert, so the
+		 * row was never written and the client dropped its optimistic copy on the
+		 * refetch that followed. The user's question vanished from the thread along
+		 * with the error, which is the worse of the two losses: the refusal is
+		 * fixable in a few clicks, and retyping is the only way back to the
+		 * question.
+		 */
+		const userMessage = await chatRepository.insertMessage({
+			id: newId(),
+			organizationId: workspaceId,
+			conversationId,
+			role: "user",
+			content: input.content,
+			userId: actorId,
+		})
+
+		try {
+			return await this.buildTurn(
+				workspaceId,
+				conversation,
+				input,
+				actorId,
+				userMessage?.id ?? newId(),
+				assistantMessageId,
+			)
+		} catch (error) {
+			await this.recordRefusedTurn(workspaceId, conversation.id, assistantMessageId, actorId, error)
+			throw error
+		}
+	},
+
+	/**
+	 * Leaves the refusal in the thread next to the question that caused it.
+	 *
+	 * The endpoint still answers with its status code — a 402 for credits is what
+	 * the client acts on — but a toast is gone the moment it is dismissed, and
+	 * the thread is where the user looks to find out what happened.
+	 */
+	async recordRefusedTurn(
+		workspaceId: string,
+		conversationId: string,
+		assistantMessageId: string,
+		actorId: string,
+		error: unknown,
+	) {
+		// Only domain errors carry a message meant for a customer. Anything else
+		// is an internal failure whose text belongs in the logs, not in a thread.
+		const reason = isAppError(error)
+			? error.message
+			: "Something went wrong before the answer could start."
+
+		await chatRepository.insertMessage({
+			id: assistantMessageId,
+			organizationId: workspaceId,
+			conversationId,
+			role: "assistant",
+			content: "",
+			status: "failed",
+			error: reason.slice(0, 500),
+			userId: actorId,
+		})
+	},
+
+	async buildTurn(
+		workspaceId: string,
+		conversation: PreparedTurn["conversation"],
+		input: SendMessageInput,
+		actorId: string,
+		userMessageId: string,
+		assistantMessageId: string,
+	): Promise<PreparedTurn> {
 		const summary = await billingService.getSummary(workspaceId)
 		if (summary.credits.total < MINIMUM_CREDITS) {
 			throw new EntitlementError(
@@ -288,7 +378,6 @@ export const chatService = {
 			await modelService.assertSelectable(workspaceId, selection, "chat")
 		}
 
-		const definition = await findCatalogueModel(selection.provider, selection.model)
 		const client = chatCapableClient(selection.provider)
 		// A provider may have an adapter for only some capabilities — the rerank
 		// providers have no chat method at all — so the check is for the method,
@@ -298,6 +387,31 @@ export const chatService = {
 				`This deployment cannot run chat with the ${selection.provider} provider.`,
 			)
 		}
+
+		return {
+			conversation,
+			client,
+			selection,
+			input,
+			userMessageId,
+			assistantMessageId,
+			actorId,
+		}
+	},
+
+	/**
+	 * Searches the knowledge bases and builds the prompt.
+	 *
+	 * Runs after the stream has opened rather than before it, which is a
+	 * deliberate reversal: retrieval and reranking are the slowest part of a turn
+	 * and used to happen in silence, behind a request that had not answered yet.
+	 * Everything that can *refuse* a turn still happens in `prepareTurn`, so a
+	 * refusal is still a status code — what moved here is work that can only
+	 * fail, and a failure is something the client can be told about mid-stream.
+	 */
+	async gatherContext(workspaceId: string, turn: PreparedTurn): Promise<TurnContext> {
+		const { conversation, input } = turn
+		const definition = await findCatalogueModel(turn.selection.provider, turn.selection.model)
 
 		const baseIds = [
 			...(conversation.knowledgeBaseId ? [conversation.knowledgeBaseId] : []),
@@ -336,8 +450,12 @@ export const chatService = {
 		}
 
 		const history = (
-			await chatRepository.listRecentMessages(conversationId, HISTORY_TURNS * 2)
+			// One extra row, because the question being answered was written before
+			// this call and would otherwise take a slot in the window it is not part
+			// of — it is passed to the prompt separately.
+			await chatRepository.listRecentMessages(conversation.id, HISTORY_TURNS * 2 + 1)
 		)
+			.filter((row) => row.id !== turn.userMessageId)
 			// A failed turn left its error on the row and no useful content; feeding
 			// it back would teach the model that failing is a normal answer. A
 			// stopped one is different: it is a real, shorter answer the user read,
@@ -366,28 +484,7 @@ export const chatService = {
 			toPage: entry.toPage,
 		}))
 
-		const userMessage = await chatRepository.insertMessage({
-			id: newId(),
-			organizationId: workspaceId,
-			conversationId,
-			role: "user",
-			content: input.content,
-			userId: actorId,
-		})
-
-		const assistantMessageId = newId()
-
-		return {
-			conversation,
-			client,
-			selection,
-			messages,
-			citations,
-			rerankUsage,
-			userMessageId: userMessage?.id ?? newId(),
-			assistantMessageId,
-			actorId,
-		}
+		return { messages, citations, rerankUsage }
 	},
 
 	/**
@@ -412,9 +509,9 @@ export const chatService = {
 		// turn to stop, and it needs it early enough that pressing stop half a
 		// second in already works.
 		yield { type: "start", messageId: turn.assistantMessageId }
-		yield { type: "citations", citations: turn.citations }
 
 		const credential = await requireCredential(turn.selection.provider)
+		let context: TurnContext = { messages: [], citations: [], rerankUsage: null }
 		let answer = ""
 		let usage = { inputTokens: 0, outputTokens: 0 }
 		let failure: string | undefined
@@ -436,19 +533,19 @@ export const chatService = {
 
 			// The reranker ran before a token was generated, so it is charged
 			// whether or not the answer succeeded — the call was made either way.
-			if (turn.rerankUsage && turn.rerankUsage.tokens > 0) {
+			if (context.rerankUsage && context.rerankUsage.tokens > 0) {
 				await usageService.recordAndCharge({
 					workspaceId,
 					projectId: turn.conversation.projectId,
 					userId: turn.actorId,
 					operation: "rerank",
-					provider: turn.rerankUsage.provider,
-					model: turn.rerankUsage.model,
-					inputTokens: turn.rerankUsage.tokens,
+					provider: context.rerankUsage.provider,
+					model: context.rerankUsage.model,
+					inputTokens: context.rerankUsage.tokens,
 					reference: `rerank:${turn.assistantMessageId}`,
 					metadata: {
 						conversationId: turn.conversation.id,
-						tokensEstimated: turn.rerankUsage.estimated,
+						tokensEstimated: context.rerankUsage.estimated,
 					},
 				})
 			}
@@ -463,7 +560,7 @@ export const chatService = {
 					conversationId: turn.conversation.id,
 					role: "assistant",
 					content: "",
-					citations: turn.citations,
+					citations: context.citations,
 					provider: turn.selection.provider,
 					model: turn.selection.model,
 					status: stopped ? "stopped" : "failed",
@@ -483,7 +580,7 @@ export const chatService = {
 			const estimated = usage.inputTokens === 0 && usage.outputTokens === 0
 			const billed = estimated
 				? {
-						inputTokens: turn.messages.reduce(
+						inputTokens: context.messages.reduce(
 							(total, message) => total + estimateTokens(message.content),
 							0,
 						),
@@ -504,7 +601,7 @@ export const chatService = {
 				metadata: {
 					conversationId: turn.conversation.id,
 					knowledgeBaseId: turn.conversation.knowledgeBaseId,
-					citations: turn.citations.length,
+					citations: context.citations.length,
 					stopped,
 					tokensEstimated: estimated,
 				},
@@ -516,7 +613,7 @@ export const chatService = {
 				conversationId: turn.conversation.id,
 				role: "assistant",
 				content: answer,
-				citations: turn.citations,
+				citations: context.citations,
 				provider: turn.selection.provider,
 				model: turn.selection.model,
 				inputTokens: billed.inputTokens,
@@ -537,6 +634,43 @@ export const chatService = {
 			outcome = { credits: charge.credits, usage: billed }
 		}
 
+		yield { type: "phase", phase: "retrieving" }
+		try {
+			context = await this.gatherContext(workspaceId, turn)
+		} catch (error) {
+			// Retrieval can only fail, never refuse — a base that has been deleted,
+			// a provider that will not embed the question. The row is still written
+			// so the thread keeps the question and says what went wrong beside it.
+			failure = error instanceof Error ? error.message : "Retrieval failed."
+			log.error("chat.retrieval_failed", error, {
+				workspaceId,
+				conversationId: turn.conversation.id,
+			})
+			await persist()
+			yield { type: "error", message: failure }
+			return
+		}
+
+		// Stop is offered from the `start` frame, so it can be pressed while the
+		// search is still running. Without this check the turn would ignore it and
+		// generate a full answer nobody asked for any more.
+		if (await isStopRequested(workspaceId, turn.conversation.id, turn.assistantMessageId)) {
+			stopped = true
+			await persist()
+			await clearStop(workspaceId, turn.conversation.id, turn.assistantMessageId)
+			yield {
+				type: "done",
+				messageId: turn.assistantMessageId,
+				stopped: true,
+				credits: outcome?.credits ?? 0,
+				usage: { input: 0, output: 0 },
+			}
+			return
+		}
+
+		yield { type: "citations", citations: context.citations }
+		yield { type: "phase", phase: "generating" }
+
 		try {
 			// Checked between tokens rather than per token: a Redis round trip on
 			// every delta would cost more than the generation it is watching.
@@ -544,7 +678,7 @@ export const chatService = {
 
 			for await (const event of turn.client.streamChat(credential, {
 				model: turn.selection.model,
-				messages: turn.messages,
+				messages: context.messages,
 				maxTokens: MAX_OUTPUT_TOKENS,
 				signal,
 			})) {
@@ -623,11 +757,13 @@ export const chatService = {
 		turn: PreparedTurn,
 	) {
 		let answer = ""
+		let citations: MessageCitation[] = []
 		let result: Extract<ChatStreamEvent, { type: "done" }> | undefined
 		let failure: string | undefined
 
 		for await (const event of this.streamTurn(workspaceId, turn)) {
 			if (event.type === "delta") answer += event.text
+			if (event.type === "citations") citations = event.citations
 			if (event.type === "done") result = event
 			if (event.type === "error") failure = event.message
 		}
@@ -639,7 +775,7 @@ export const chatService = {
 		return {
 			messageId: result.messageId,
 			content: answer,
-			citations: turn.citations,
+			citations,
 			provider: turn.selection.provider,
 			model: turn.selection.model,
 			credits: result.credits,

@@ -5,19 +5,43 @@ import {
 	isProviderConfigured,
 	listCatalogue,
 } from "../../ai/catalogue"
-import type { ModelCapability } from "../../ai/models"
+import { modelKey } from "../../ai/models"
+import type { ModelCapability, ModelDefinition } from "../../ai/models"
 import { EntitlementError, ValidationError } from "../../shared/errors"
 import { auditService } from "../audit/audit.service"
 import { billingService } from "../billing/billing.service"
 import { planLimits } from "../billing/plans"
+import type { PlanName } from "../billing/plans"
 import { projectRepository } from "../project/project.repository"
 import { providerService } from "../provider/provider.service"
+import type { PlanModelAccess } from "../provider/provider.service"
 import { modelRepository } from "./model.repository"
 import type { UpdateModelSettingsInput } from "./model.dto"
 
 export interface ModelSelection {
 	provider: string
 	model: string
+}
+
+/**
+ * Whether a plan may run one model.
+ *
+ * Two rules, in order. An administrator who has listed models for this plan and
+ * capability has said exactly what it may run, and that list wins. An empty list
+ * is not "nothing" — it is "nothing has been said", and the tier rule in
+ * `plans.ts` answers instead, which is what every deployment had before the
+ * allowlist existed.
+ */
+function planAllowsModel(
+	access: PlanModelAccess,
+	plan: PlanName,
+	definition: Pick<ModelDefinition, "provider" | "model" | "capability" | "tier">,
+): boolean {
+	const allowed = access[definition.capability].allowed
+	if (allowed.length > 0) {
+		return allowed.includes(modelKey(definition.provider, definition.model))
+	}
+	return planLimits(plan).modelTiers.includes(definition.tier)
 }
 
 /**
@@ -33,12 +57,13 @@ export interface ModelSelection {
  */
 export const modelService = {
 	async listModels(workspaceId: string) {
-		const [plan, catalogue, configured] = await Promise.all([
+		const [plan, catalogue, configured, access] = await Promise.all([
 			billingService.getPlan(workspaceId),
 			listCatalogue(),
 			configuredProviders(),
+			providerService.getPlanModelAccess(),
 		])
-		const allowedTiers = planLimits(plan).modelTiers
+		const planAccess = access[plan]
 		const withKey = new Set(configured)
 
 		return {
@@ -51,7 +76,7 @@ export const modelService = {
 				.filter((entry) => entry.enabled)
 				.map((entry) => {
 					const callable = withKey.has(entry.provider) && hasAdapter(entry.provider)
-					const entitled = allowedTiers.includes(entry.tier)
+					const entitled = planAllowsModel(planAccess, plan, entry)
 					return {
 						provider: entry.provider,
 						model: entry.model,
@@ -88,8 +113,18 @@ export const modelService = {
 			}
 		}
 
-		const defaults = await providerService.getPlatformDefaults()
-		return { chat: defaults.chat, embedding: defaults.embedding, isDefault: true }
+		const [plan, access, platform] = await Promise.all([
+			billingService.getPlan(workspaceId),
+			providerService.getPlanModelAccess(),
+			providerService.getPlatformDefaults(),
+		])
+		const planAccess = access[plan]
+
+		return {
+			chat: planAccess.chat.default ?? platform.chat,
+			embedding: planAccess.embedding.default ?? platform.embedding,
+			isDefault: true,
+		}
 	},
 
 	async updateSettings(
@@ -167,11 +202,14 @@ export const modelService = {
 			)
 		}
 
-		const plan = await billingService.getPlan(workspaceId)
-		if (!planLimits(plan).modelTiers.includes(definition.tier)) {
+		const [plan, access] = await Promise.all([
+			billingService.getPlan(workspaceId),
+			providerService.getPlanModelAccess(),
+		])
+		if (!planAllowsModel(access[plan], plan, definition)) {
 			throw new EntitlementError(
 				"MODEL_NOT_IN_PLAN",
-				`The ${plan} plan does not include ${definition.model}. Upgrade to use premium models.`,
+				`The ${plan} plan does not include ${definition.model}.`,
 				{ plan, ...selection, tier: definition.tier },
 			)
 		}

@@ -1,8 +1,11 @@
 import type { AppContext } from "../../api/types"
 import { requireParam, requireUser } from "../../api/types"
+import { ValidationError } from "../../shared/errors"
+import { isPlanName } from "../billing/plans"
 import {
 	patchModelSchema,
 	saveCredentialSchema,
+	setPlanModelAccessSchema,
 	setPlatformDefaultsSchema,
 	upsertModelSchema,
 } from "./provider.dto"
@@ -86,5 +89,17 @@ export const providerController = {
 		const actor = requireUser(c)
 		const input = setPlatformDefaultsSchema.parse(await c.req.json())
 		return c.json(await providerService.setPlatformDefaults(input, actor.id))
+	},
+
+	async getPlanModelAccess(c: AppContext) {
+		return c.json(await providerService.getPlanModelAccess())
+	},
+
+	async setPlanModelAccess(c: AppContext) {
+		const actor = requireUser(c)
+		const plan = requireParam(c, "plan")
+		if (!isPlanName(plan)) throw new ValidationError(`Unknown plan ${plan}.`)
+		const input = setPlanModelAccessSchema.parse(await c.req.json())
+		return c.json(await providerService.setPlanModelAccess(plan, input, actor.id))
 	},
 }

@@ -5,7 +5,10 @@ import {
 	requireCredential,
 } from "../../ai/catalogue"
 import { PROVIDER_DESCRIPTORS, findProvider } from "../../ai/clients"
-import { DEFAULT_CHAT, DEFAULT_EMBEDDING, tierFor } from "../../ai/models"
+import { DEFAULT_CHAT, DEFAULT_EMBEDDING, modelKey, tierFor } from "../../ai/models"
+import type { ModelCapability } from "../../ai/models"
+import { PLAN_NAMES } from "../billing/plans"
+import type { PlanName } from "../billing/plans"
 import {
 	EncryptionUnavailableError,
 	encryptSecret,
@@ -20,6 +23,7 @@ import { providerRepository } from "./provider.repository"
 import type {
 	PatchModelInput,
 	SaveCredentialInput,
+	SetPlanModelAccessInput,
 	SetPlatformDefaultsInput,
 	UpsertModelInput,
 } from "./provider.dto"
@@ -27,10 +31,31 @@ import type {
 const log = logger.child({ module: "provider" })
 
 export const MODEL_DEFAULTS_KEY = "model.defaults"
+export const PLAN_MODEL_ACCESS_KEY = "model.plan_access"
 
 export interface PlatformModelDefaults {
 	chat: { provider: string; model: string }
 	embedding: { provider: string; model: string }
+}
+
+export interface CapabilityAccess {
+	/** `provider:model` keys. Empty means "whatever the plan's tier allows". */
+	allowed: string[]
+	default: { provider: string; model: string } | null
+}
+
+export interface PlanModelAccess {
+	chat: CapabilityAccess
+	embedding: CapabilityAccess
+	rerank: Omit<CapabilityAccess, "default">
+}
+
+export type PlanModelAccessMap = Record<PlanName, PlanModelAccess>
+
+const EMPTY_ACCESS: PlanModelAccess = {
+	chat: { allowed: [], default: null },
+	embedding: { allowed: [], default: null },
+	rerank: { allowed: [] },
 }
 
 export const providerService = {
@@ -371,6 +396,96 @@ export const providerService = {
 			chat: stored?.chat ?? { ...DEFAULT_CHAT },
 			embedding: stored?.embedding ?? { ...DEFAULT_EMBEDDING },
 		}
+	},
+
+	/**
+	 * Which models each plan may run, and what it runs by default.
+	 *
+	 * Absent for a plan, or with an empty `allowed`, means the tier rule in
+	 * `plans.ts` still decides — so this is a narrowing tool laid over the
+	 * existing entitlement, not a replacement that has to be filled in before
+	 * anything works.
+	 */
+	async getPlanModelAccess(): Promise<PlanModelAccessMap> {
+		const row = await providerRepository.findSetting(PLAN_MODEL_ACCESS_KEY)
+		const stored = row?.value as Partial<Record<PlanName, PlanModelAccess>> | undefined
+
+		return Object.fromEntries(
+			PLAN_NAMES.map((plan) => [
+				plan,
+				{
+					chat: stored?.[plan]?.chat ?? { ...EMPTY_ACCESS.chat },
+					embedding: stored?.[plan]?.embedding ?? { ...EMPTY_ACCESS.embedding },
+					rerank: stored?.[plan]?.rerank ?? { ...EMPTY_ACCESS.rerank },
+				},
+			]),
+		) as PlanModelAccessMap
+	},
+
+	async setPlanModelAccess(plan: PlanName, input: SetPlanModelAccessInput, actorId: string) {
+		const catalogue = await listCatalogue()
+		const byKey = new Map(catalogue.map((entry) => [modelKey(entry.provider, entry.model), entry]))
+
+		const assertAllowed = (keys: string[], capability: ModelCapability) => {
+			for (const key of keys) {
+				const entry = byKey.get(key)
+				if (!entry || !entry.enabled) {
+					throw new ValidationError(`${key} is not an offered model.`, { key })
+				}
+				if (entry.capability !== capability) {
+					throw new ValidationError(
+						`${key} is a ${entry.capability} model and cannot be allowed for ${capability}.`,
+						{ key },
+					)
+				}
+			}
+		}
+
+		/**
+		 * A default outside its own allowed list is the one combination that
+		 * bricks a plan: every workspace on it resolves to a model the same plan
+		 * then refuses, and the error names entitlement rather than the setting
+		 * that caused it.
+		 */
+		const assertDefault = (
+			access: { allowed: string[]; default: { provider: string; model: string } | null },
+			capability: ModelCapability,
+		) => {
+			if (!access.default) return
+			const key = modelKey(access.default.provider, access.default.model)
+			const entry = byKey.get(key)
+			if (!entry || !entry.enabled || entry.capability !== capability) {
+				throw new ValidationError(
+					`The ${capability} default must be an offered ${capability} model.`,
+					access.default,
+				)
+			}
+			if (access.allowed.length > 0 && !access.allowed.includes(key)) {
+				throw new ValidationError(
+					`The ${capability} default must be one of the models this plan allows.`,
+					access.default,
+				)
+			}
+		}
+
+		assertAllowed(input.chat.allowed, "chat")
+		assertAllowed(input.embedding.allowed, "embedding")
+		assertAllowed(input.rerank.allowed, "rerank")
+		assertDefault(input.chat, "chat")
+		assertDefault(input.embedding, "embedding")
+
+		const next = { ...(await this.getPlanModelAccess()), [plan]: input }
+		await providerRepository.upsertSetting(PLAN_MODEL_ACCESS_KEY, next, actorId)
+
+		await auditService.record({
+			action: "platform.plan_model_access.updated",
+			actorId,
+			targetType: "platform_setting",
+			targetId: `${PLAN_MODEL_ACCESS_KEY}:${plan}`,
+			metadata: { plan, ...input },
+		})
+
+		return this.getPlanModelAccess()
 	},
 
 	async setPlatformDefaults(input: SetPlatformDefaultsInput, actorId: string) {

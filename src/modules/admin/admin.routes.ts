@@ -43,3 +43,8 @@ adminRoutes.patch("/providers/:provider/models/:model", providerController.patch
 adminRoutes.delete("/providers/:provider/models/:model", providerController.removeModel)
 adminRoutes.get("/settings/models", providerController.getDefaults)
 adminRoutes.put("/settings/models", providerController.setDefaults)
+// Which models each plan may offer, and what it runs by default. One plan per
+// request: the screen edits one at a time, and a whole-map PUT would let a stale
+// tab overwrite a plan the operator never looked at.
+adminRoutes.get("/settings/model-access", providerController.getPlanModelAccess)
+adminRoutes.put("/settings/model-access/:plan", providerController.setPlanModelAccess)
