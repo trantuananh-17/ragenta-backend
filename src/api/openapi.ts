@@ -466,6 +466,11 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		access: "owner, admin, member",
 	},
 
+	"GET /v1/workspaces/:workspaceId/agent-tools": {
+		summary: "The tools this deployment can give an agent",
+		tags: ["Agents"],
+		access: "any member",
+	},
 	"GET /v1/workspaces/:workspaceId/agents": {
 		summary: "List agents, most recently changed first",
 		tags: ["Agents"],

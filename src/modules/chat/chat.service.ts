@@ -739,9 +739,12 @@ export const chatService = {
 				if (event.type === "delta") {
 					answer += event.text
 					yield { type: "delta", text: event.text }
-				} else {
+				} else if (event.type === "done") {
 					usage = event.usage
 				}
+				// A `tool_call` cannot arrive here: chat offers no tools. Ignored
+				// rather than asserted, because a model that invented one is not a
+				// reason to fail an answer the user is already reading.
 
 				if (Date.now() >= nextStopCheck) {
 					nextStopCheck = Date.now() + STOP_POLL_MS

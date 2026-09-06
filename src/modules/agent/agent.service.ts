@@ -1,7 +1,8 @@
+import { chatCapableClient } from "../../ai/clients"
 import { resolveRerankModel } from "../../ai/rerank"
 import { db } from "../../db/client"
 import type { DbExecutor } from "../../db/client"
-import { ConflictError, NotFoundError } from "../../shared/errors"
+import { ConflictError, NotFoundError, ValidationError } from "../../shared/errors"
 import { newId } from "../../shared/id"
 import type { PaginationQuery } from "../../shared/pagination"
 import { page } from "../../shared/pagination"
@@ -9,6 +10,7 @@ import { auditService } from "../audit/audit.service"
 import { knowledgeService } from "../knowledge/knowledge.service"
 import { modelService } from "../model/model.service"
 import { agentRepository } from "./agent.repository"
+import { TOOL_CATALOGUE, TOOL_IDS, isToolId } from "./tools"
 import type { AgentConfigInput, CreateAgentInput, UpdateAgentInput } from "./agent.dto"
 import { requestStop } from "./stop-signal"
 
@@ -25,6 +27,7 @@ async function versionValues(
 	version: number,
 	config: AgentConfigInput,
 	actorId: string,
+	projectId: string | null,
 ) {
 	await knowledgeService.assertBasesSearchableTogether(workspaceId, config.knowledgeBaseIds)
 	if (config.model) {
@@ -32,6 +35,35 @@ async function versionValues(
 	}
 	if (config.rerank) {
 		await resolveRerankModel(config.rerank.provider, config.rerank.model)
+	}
+
+	const unknown = config.tools.filter((id) => !isToolId(id))
+	if (unknown.length > 0) {
+		throw new ValidationError(
+			`This deployment has no tool called ${unknown.map((id) => `"${id}"`).join(", ")}.`,
+		)
+	}
+
+	if (config.tools.includes("knowledge_search") && config.knowledgeBaseIds.length === 0) {
+		throw new ValidationError(
+			"An agent given the knowledge search tool needs at least one knowledge base to search.",
+		)
+	}
+
+	/**
+	 * A tool-using agent is refused at publish time on a provider that cannot call
+	 * tools, rather than at run time. The failure is otherwise invisible: the model
+	 * answers in prose, never calls anything, and looks merely unhelpful.
+	 */
+	if (config.tools.length > 0) {
+		const selection =
+			config.model ?? (await modelService.resolveChatModel(workspaceId, projectId ?? undefined))
+		const client = chatCapableClient(selection.provider)
+		if (!client?.supportsTools) {
+			throw new ValidationError(
+				`The ${selection.provider} provider cannot call tools. Choose a different model for this agent, or remove its tools.`,
+			)
+		}
 	}
 
 	return {
@@ -51,11 +83,23 @@ async function versionValues(
 		rerankProvider: config.rerank?.provider ?? null,
 		rerankModel: config.rerank?.model ?? null,
 		groundedOnly: config.groundedOnly,
+		tools: config.tools,
+		maxRounds: config.maxRounds,
+		creditCeiling: config.creditCeiling?.toFixed(4) ?? null,
 		createdBy: actorId,
 	}
 }
 
 export const agentService = {
+	/**
+	 * The tools this deployment can run, for the screen that offers them. Read
+	 * from the registry rather than restated, so a tool added to the code appears
+	 * here without a second edit.
+	 */
+	tools() {
+		return TOOL_IDS.map((id) => ({ id, ...TOOL_CATALOGUE[id] }))
+	},
+
 	async list(workspaceId: string, query: PaginationQuery) {
 		const { items, total } = await agentRepository.list(workspaceId, query)
 		return page(items, total, query)
@@ -74,7 +118,14 @@ export const agentService = {
 	 */
 	async create(workspaceId: string, input: CreateAgentInput, actorId: string) {
 		const agentId = newId()
-		const version = await versionValues(workspaceId, agentId, 1, input.config, actorId)
+		const version = await versionValues(
+			workspaceId,
+			agentId,
+			1,
+			input.config,
+			actorId,
+			input.projectId,
+		)
 
 		const created = await db
 			.transaction(async (tx: DbExecutor) => {
@@ -163,7 +214,14 @@ export const agentService = {
 
 		const created = await db.transaction(async (tx: DbExecutor) => {
 			const next = await agentRepository.nextVersion(agentId, tx)
-			const values = await versionValues(workspaceId, agentId, next, config, actorId)
+			const values = await versionValues(
+				workspaceId,
+				agentId,
+				next,
+				config,
+				actorId,
+				existing.projectId,
+			)
 			const version = await agentRepository.insertVersion(values, tx)
 			await agentRepository.update(workspaceId, agentId, { currentVersion: next }, tx)
 			return version

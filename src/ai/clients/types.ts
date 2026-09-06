@@ -6,11 +6,43 @@ export interface ProviderCredential {
 	baseUrl?: string
 }
 
-export type ChatRole = "system" | "user" | "assistant"
+export type ChatRole = "system" | "user" | "assistant" | "tool"
+
+/**
+ * One call the model asked for.
+ *
+ * `arguments` is JSON **text**, exactly as the model produced it, not a parsed
+ * object: a model can emit arguments that do not parse, and that is the caller's
+ * problem to report to the model rather than the adapter's to throw over. The id
+ * is the provider's own where it has one — Google does not, so its adapter
+ * synthesises one — and a tool result must quote it back.
+ */
+export interface ToolCall {
+	id: string
+	name: string
+	arguments: string
+}
 
 export interface ChatMessage {
 	role: ChatRole
 	content: string
+	/** Set on an assistant message that asked for tools. */
+	toolCalls?: ToolCall[]
+	/** Set on a `tool` message: which call it answers. */
+	toolCallId?: string
+	/** Set on a `tool` message: the tool's name, which Anthropic and Google need. */
+	name?: string
+}
+
+/**
+ * A tool offered to the model. `parameters` is a JSON Schema object — the tool
+ * registry derives it from the same zod schema it validates arguments against,
+ * so what the model is told and what is enforced cannot drift.
+ */
+export interface ToolDefinition {
+	name: string
+	description: string
+	parameters: Record<string, unknown>
 }
 
 export interface ChatRequest {
@@ -19,6 +51,9 @@ export interface ChatRequest {
 	temperature?: number
 	maxTokens?: number
 	signal?: AbortSignal
+	/** Absent means the model may not call anything, which is the default. */
+	tools?: ToolDefinition[]
+	toolChoice?: "auto" | "none"
 }
 
 export interface TokenUsage {
@@ -28,6 +63,8 @@ export interface TokenUsage {
 
 export interface ChatResult {
 	text: string
+	/** Empty unless the request offered tools and the model asked for one. */
+	toolCalls?: ToolCall[]
 	usage: TokenUsage
 	finishReason: string
 }
@@ -36,9 +73,17 @@ export interface ChatResult {
  * A streamed answer. `done` always arrives last and carries the provider's own
  * token counts — usage is charged from those, never from a local estimate, so
  * the stream cannot end without the numbers needed to bill it.
+ *
+ * A `tool_call` is emitted **whole**, once the adapter has assembled it, rather
+ * than as argument fragments. All three providers stream those arguments in
+ * pieces, and nothing downstream can use half of a JSON object: the runner needs
+ * the complete call before it can execute anything, and a UI showing a
+ * half-written argument list would be showing noise. Assembling once, in the
+ * adapter, is also the only place that knows each provider's fragment shape.
  */
 export type ChatStreamEvent =
 	| { type: "delta"; text: string }
+	| { type: "tool_call"; call: ToolCall }
 	| { type: "done"; usage: TokenUsage; finishReason: string }
 
 export interface EmbedRequest {
@@ -111,6 +156,17 @@ export interface ListedModel {
 export interface ProviderClient {
 	readonly id: string
 	readonly defaultBaseUrl: string
+	/**
+	 * Whether `chat` and `streamChat` honour `tools`.
+	 *
+	 * Declared rather than assumed from the API shape: an OpenAI-compatible
+	 * gateway may implement chat completions and ignore `tools` entirely, and a
+	 * model silently answering in prose when it was asked to call a tool is a
+	 * failure nobody can debug from the outside. An agent configured with tools
+	 * on a provider that has not declared this is refused when the version is
+	 * published, not when it runs.
+	 */
+	readonly supportsTools?: boolean
 	chat?(credential: ProviderCredential, request: ChatRequest): Promise<ChatResult>
 	streamChat?(
 		credential: ProviderCredential,

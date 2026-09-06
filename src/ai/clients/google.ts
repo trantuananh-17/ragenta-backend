@@ -9,6 +9,8 @@ import type {
 	ProviderClient,
 	ProviderCredential,
 	TokenUsage,
+	ToolCall,
+	ToolDefinition,
 } from "./types"
 import { ProviderError, readError, sseLines } from "./types"
 
@@ -28,9 +30,14 @@ interface UsageMetadata {
 	totalTokenCount?: number
 }
 
+interface Part {
+	text?: string
+	functionCall?: { name?: string; args?: Record<string, unknown> }
+}
+
 interface GenerateResponse {
 	candidates?: {
-		content?: { parts?: { text?: string }[] }
+		content?: { parts?: Part[] }
 		finishReason?: string
 	}[]
 	usageMetadata?: UsageMetadata
@@ -46,21 +53,127 @@ function headers(credential: ProviderCredential) {
 	}
 }
 
+/**
+ * Gemini has no `tool` role either: a result is a `functionResponse` part on a
+ * **user** turn, and it correlates by function *name* rather than by a call id —
+ * Gemini does not issue one. The adapter synthesises ids on the way out and
+ * resolves them back to names here, so callers see the same shape as everywhere
+ * else.
+ */
 function toContents(messages: ChatMessage[]) {
 	const system = messages
 		.filter((message) => message.role === "system")
 		.map((message) => message.content)
 		.join("\n\n")
 
+	const contents: { role: string; parts: unknown[] }[] = []
+
+	for (const message of messages) {
+		if (message.role === "system") continue
+
+		if (message.role === "tool") {
+			const part = {
+				functionResponse: {
+					name: message.name ?? "",
+					// Gemini requires an object here, so a tool that returns a string
+					// is wrapped rather than sent bare.
+					response: { result: message.content },
+				},
+			}
+			const previous = contents.at(-1)
+			if (previous?.role === "user") previous.parts.push(part)
+			else contents.push({ role: "user", parts: [part] })
+			continue
+		}
+
+		if (message.role === "assistant" && message.toolCalls?.length) {
+			const parts: unknown[] = []
+			if (message.content) parts.push({ text: message.content })
+			for (const call of message.toolCalls) {
+				parts.push({
+					functionCall: { name: call.name, args: parseArguments(call.arguments) },
+				})
+			}
+			contents.push({ role: "model", parts })
+			continue
+		}
+
+		contents.push({
+			role: message.role === "assistant" ? "model" : "user",
+			parts: [{ text: message.content }],
+		})
+	}
+
 	return {
 		systemInstruction: system ? { parts: [{ text: system }] } : undefined,
-		contents: messages
-			.filter((message) => message.role !== "system")
-			.map((message) => ({
-				role: message.role === "assistant" ? "model" : "user",
-				parts: [{ text: message.content }],
-			})),
+		contents,
 	}
+}
+
+function parseArguments(raw: string): Record<string, unknown> {
+	try {
+		const parsed = JSON.parse(raw) as unknown
+		return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {}
+	} catch {
+		return {}
+	}
+}
+
+/**
+ * Gemini accepts a *subset* of JSON Schema and rejects the request outright when
+ * it meets a keyword it does not know — `$schema` and `additionalProperties`
+ * above all, both of which `z.toJSONSchema` emits as a matter of course. Rather
+ * than hand-writing a second schema per tool, the one schema is trimmed here.
+ */
+const UNSUPPORTED_SCHEMA_KEYS = new Set([
+	"$schema",
+	"additionalProperties",
+	"$id",
+	"$ref",
+	"definitions",
+	"$defs",
+	"exclusiveMinimum",
+	"exclusiveMaximum",
+])
+
+function trimSchema(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(trimSchema)
+	if (!value || typeof value !== "object") return value
+
+	const output: Record<string, unknown> = {}
+	for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+		if (UNSUPPORTED_SCHEMA_KEYS.has(key)) continue
+		output[key] = trimSchema(entry)
+	}
+	return output
+}
+
+function toWireTools(tools: ToolDefinition[] | undefined) {
+	if (!tools?.length) return undefined
+	return [
+		{
+			functionDeclarations: tools.map((tool) => ({
+				name: tool.name,
+				description: tool.description,
+				parameters: trimSchema(tool.parameters),
+			})),
+		},
+	]
+}
+
+/**
+ * Gemini issues no call id, so one is made from the position of the call in the
+ * turn. It only has to be unique within the exchange and stable enough for the
+ * result to be matched back, and the result is matched by name anyway.
+ */
+function callsOf(parts: Part[]): ToolCall[] {
+	return parts
+		.filter((part) => part.functionCall?.name)
+		.map((part, index) => ({
+			id: `call_${index}`,
+			name: part.functionCall?.name ?? "",
+			arguments: JSON.stringify(part.functionCall?.args ?? {}),
+		}))
 }
 
 function textOf(response: GenerateResponse): string {
@@ -79,6 +192,7 @@ function usageOf(metadata: UsageMetadata | undefined): TokenUsage {
 export const googleClient: ProviderClient = {
 	id: "google",
 	defaultBaseUrl: DEFAULT_BASE_URL,
+	supportsTools: true,
 
 	async chat(credential, request: ChatRequest): Promise<ChatResult> {
 		const { systemInstruction, contents } = toContents(request.messages)
@@ -92,6 +206,7 @@ export const googleClient: ProviderClient = {
 				body: JSON.stringify({
 					contents,
 					systemInstruction,
+					tools: toWireTools(request.tools),
 					generationConfig: {
 						temperature: request.temperature,
 						maxOutputTokens: request.maxTokens,
@@ -104,6 +219,7 @@ export const googleClient: ProviderClient = {
 		const body = (await response.json()) as GenerateResponse
 		return {
 			text: textOf(body),
+			toolCalls: callsOf(body.candidates?.[0]?.content?.parts ?? []),
 			usage: usageOf(body.usageMetadata),
 			finishReason: body.candidates?.[0]?.finishReason ?? "STOP",
 		}
@@ -124,6 +240,7 @@ export const googleClient: ProviderClient = {
 				body: JSON.stringify({
 					contents,
 					systemInstruction,
+					tools: toWireTools(request.tools),
 					generationConfig: {
 						temperature: request.temperature,
 						maxOutputTokens: request.maxTokens,
@@ -135,6 +252,7 @@ export const googleClient: ProviderClient = {
 
 		let usage: TokenUsage = { inputTokens: 0, outputTokens: 0 }
 		let finishReason = "STOP"
+		let seen = 0
 
 		for await (const payload of sseLines(response)) {
 			let chunk: GenerateResponse
@@ -152,6 +270,16 @@ export const googleClient: ProviderClient = {
 
 			const text = textOf(chunk)
 			if (text) yield { type: "delta", text }
+
+			// Unlike the other two, Gemini sends a `functionCall` part complete in
+			// one chunk, so there is nothing to assemble — it is forwarded as it
+			// arrives. `seen` only keeps the synthesised ids unique across chunks.
+			for (const call of callsOf(candidate?.content?.parts ?? [])) {
+				yield {
+					type: "tool_call",
+					call: { ...call, id: `call_${seen++}` },
+				}
+			}
 		}
 
 		yield { type: "done", usage, finishReason }

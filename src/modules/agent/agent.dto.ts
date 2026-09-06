@@ -29,6 +29,22 @@ export const agentConfigSchema = z.object({
 	vectorWeight: z.number().min(0).max(1).nullable().default(null),
 	rerank: modelSelectionSchema.nullable().default(null),
 	/**
+	 * Which tools a run may call, by id. Validated against what this deployment
+	 * actually has — an unknown id is a typo that would otherwise become an agent
+	 * silently missing a capability its author thought it had.
+	 */
+	tools: z.array(z.string().trim().min(1)).max(8).default([]),
+	/**
+	 * How many model↔tool rounds one run may take. 1 means no loop: the model
+	 * answers once and any tool call it makes is not executed.
+	 */
+	maxRounds: z.number().int().min(1).max(10).default(1),
+	/**
+	 * The most credits one run may spend before it is stopped. Null bounds the run
+	 * by `maxRounds` alone, which says nothing about cost.
+	 */
+	creditCeiling: z.number().min(0).nullable().default(null),
+	/**
 	 * On by default for the same reason chat defaults to it: an agent that
 	 * quietly falls back to the model's own memory is the failure this product
 	 * exists to avoid. Ignored by an agent with no knowledge base.

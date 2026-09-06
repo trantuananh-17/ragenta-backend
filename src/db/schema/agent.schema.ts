@@ -118,13 +118,25 @@ export const agentVersion = pgTable(
 		groundedOnly: boolean("grounded_only").default(true).notNull(),
 
 		/**
-		 * Reserved for the tool loop (Phase 2). Written empty by Phase 1 rather
-		 * than added later, so a version row does not change shape once agents are
-		 * already being versioned in production.
+		 * Which tools a run of this version may call, by id.
+		 *
+		 * This is a security boundary, not a preference: the run builds its tool
+		 * set from here and from nothing the caller or the model sent. An id this
+		 * deployment does not know is refused when the version is published.
 		 */
 		tools: jsonb("tools").$type<string[]>().default([]).notNull(),
 		/** How many model↔tool rounds a run may take. 1 = no tool loop. */
 		maxRounds: integer("max_rounds").default(1).notNull(),
+		/**
+		 * The most credits one run of this version may spend before it is stopped.
+		 *
+		 * A tool loop can call the model many times, and a model that keeps
+		 * deciding to search one more time would otherwise be bounded only by
+		 * `max_rounds` — which says nothing about cost, because one round on a
+		 * premium model with a full context is not one round on a cheap one. Null
+		 * means only `max_rounds` bounds the run.
+		 */
+		creditCeiling: numeric("credit_ceiling", { precision: 14, scale: 4 }),
 
 		createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -204,8 +216,10 @@ export const agentRunStep = pgTable(
 			.notNull()
 			.references(() => agentRun.id, { onDelete: "cascade" }),
 		seq: integer("seq").notNull(),
-		/** model | retrieval. `tool` joins in Phase 2. */
+		/** model | retrieval | tool. */
 		kind: text("kind").notNull(),
+		/** The tool's id on a `tool` step. Null on the others, which need no name. */
+		name: text("name"),
 		/** running | succeeded | failed. */
 		status: text("status").default("running").notNull(),
 
@@ -226,7 +240,7 @@ export const agentRunStep = pgTable(
 	},
 	(table) => [
 		uniqueIndex("agentRunStep_runId_seq_uidx").on(table.runId, table.seq),
-		check("agentRunStep_kind_check", sql`${table.kind} in ('model', 'retrieval')`),
+		check("agentRunStep_kind_check", sql`${table.kind} in ('model', 'retrieval', 'tool')`),
 		check(
 			"agentRunStep_status_check",
 			sql`${table.status} in ('running', 'succeeded', 'failed')`,

@@ -19,6 +19,7 @@ agentRoutes.use("*", requireAuth)
 
 const contributor = requireWorkspaceRole("owner", "admin", "member")
 
+agentRoutes.get("/:workspaceId/agent-tools", workspaceScope, agentController.listTools)
 agentRoutes.get("/:workspaceId/agents", workspaceScope, agentController.list)
 agentRoutes.post("/:workspaceId/agents", workspaceScope, contributor, agentController.create)
 agentRoutes.get("/:workspaceId/agents/:agentId", workspaceScope, agentController.get)

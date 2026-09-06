@@ -14,6 +14,11 @@ import { agentService } from "./agent.service"
 import { agentRunner } from "./runner"
 
 export const agentController = {
+	listTools(c: AppContext) {
+		requireMembership(c)
+		return c.json(agentService.tools())
+	},
+
 	async list(c: AppContext) {
 		const membership = requireMembership(c)
 		const query = paginationQuerySchema.parse(c.req.query())

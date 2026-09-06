@@ -1,4 +1,5 @@
 import type {
+	ChatMessage,
 	ChatRequest,
 	ChatResult,
 	ChatStreamEvent,
@@ -8,6 +9,8 @@ import type {
 	ProviderClient,
 	ProviderCredential,
 	TokenUsage,
+	ToolCall,
+	ToolDefinition,
 } from "./types"
 import { ProviderError, readError, sseLines } from "./types"
 
@@ -25,13 +28,27 @@ import { ProviderError, readError, sseLines } from "./types"
  * Written on fetch rather than the SDK: three endpoints are used in total, and
  * an SDK would be a dependency whose upgrades have to be managed for that.
  */
+interface WireToolCall {
+	id?: string
+	function?: { name?: string; arguments?: string }
+}
+
 interface CompletionResponse {
-	choices?: { message?: { content?: string }; finish_reason?: string }[]
+	choices?: {
+		message?: { content?: string; tool_calls?: WireToolCall[] }
+		finish_reason?: string
+	}[]
 	usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
 }
 
 interface StreamChunk {
-	choices?: { delta?: { content?: string }; finish_reason?: string | null }[]
+	choices?: {
+		delta?: {
+			content?: string
+			tool_calls?: (WireToolCall & { index?: number })[]
+		}
+		finish_reason?: string | null
+	}[]
 	usage?: { prompt_tokens?: number; completion_tokens?: number } | null
 }
 
@@ -40,6 +57,46 @@ function usageOf(raw: CompletionResponse["usage"] | StreamChunk["usage"]): Token
 		inputTokens: raw?.prompt_tokens ?? 0,
 		outputTokens: raw?.completion_tokens ?? 0,
 	}
+}
+
+/** Ragenta's message shape in the wire shape this API expects. */
+function toWireMessages(messages: ChatMessage[]) {
+	return messages.map((message) => {
+		if (message.role === "tool") {
+			return {
+				role: "tool" as const,
+				tool_call_id: message.toolCallId,
+				content: message.content,
+			}
+		}
+		if (message.role === "assistant" && message.toolCalls?.length) {
+			return {
+				role: "assistant" as const,
+				// Null rather than "": the API rejects an assistant message that has
+				// neither content nor tool calls, and a model that called a tool
+				// without saying anything produces exactly that.
+				content: message.content || null,
+				tool_calls: message.toolCalls.map((call) => ({
+					id: call.id,
+					type: "function" as const,
+					function: { name: call.name, arguments: call.arguments },
+				})),
+			}
+		}
+		return { role: message.role, content: message.content }
+	})
+}
+
+function toWireTools(tools: ToolDefinition[] | undefined) {
+	if (!tools?.length) return undefined
+	return tools.map((tool) => ({
+		type: "function" as const,
+		function: {
+			name: tool.name,
+			description: tool.description,
+			parameters: tool.parameters,
+		},
+	}))
 }
 
 export function createOpenAiCompatible(
@@ -56,6 +113,13 @@ export function createOpenAiCompatible(
 		 * `embedTexts` then checks against the catalogue.
 		 */
 		supportsEmbeddingDimensions?: boolean
+		/**
+		 * Whether this deployment's endpoint implements `tools`. True for OpenAI
+		 * itself and for every gateway Ragenta ships that documents it; set false
+		 * for one that does not, so an agent with tools is refused at publish time
+		 * rather than quietly answering in prose.
+		 */
+		supportsTools?: boolean
 	} = {},
 ): ProviderClient {
 	const base = (credential: ProviderCredential) =>
@@ -69,6 +133,7 @@ export function createOpenAiCompatible(
 	const client: ProviderClient = {
 		id,
 		defaultBaseUrl,
+		supportsTools: options.supportsTools !== false,
 
 		async chat(credential, request: ChatRequest): Promise<ChatResult> {
 			const response = await fetch(`${base(credential)}/chat/completions`, {
@@ -77,9 +142,11 @@ export function createOpenAiCompatible(
 				signal: request.signal,
 				body: JSON.stringify({
 					model: request.model,
-					messages: request.messages,
+					messages: toWireMessages(request.messages),
 					temperature: request.temperature,
 					max_tokens: request.maxTokens,
+					tools: toWireTools(request.tools),
+					tool_choice: request.tools?.length ? (request.toolChoice ?? "auto") : undefined,
 				}),
 			})
 			if (!response.ok) throw await readError(id, response)
@@ -88,6 +155,13 @@ export function createOpenAiCompatible(
 			const choice = body.choices?.[0]
 			return {
 				text: choice?.message?.content ?? "",
+				toolCalls: (choice?.message?.tool_calls ?? [])
+					.filter((call) => call.function?.name)
+					.map((call, index) => ({
+						id: call.id ?? `call_${index}`,
+						name: call.function?.name ?? "",
+						arguments: call.function?.arguments ?? "{}",
+					})),
 				usage: usageOf(body.usage),
 				finishReason: choice?.finish_reason ?? "stop",
 			}
@@ -100,9 +174,11 @@ export function createOpenAiCompatible(
 				signal: request.signal,
 				body: JSON.stringify({
 					model: request.model,
-					messages: request.messages,
+					messages: toWireMessages(request.messages),
 					temperature: request.temperature,
 					max_tokens: request.maxTokens,
+					tools: toWireTools(request.tools),
+					tool_choice: request.tools?.length ? (request.toolChoice ?? "auto") : undefined,
 					stream: true,
 					// Without this the final chunk carries no usage and the turn
 					// cannot be billed from the provider's own count.
@@ -113,6 +189,10 @@ export function createOpenAiCompatible(
 
 			let usage: TokenUsage = { inputTokens: 0, outputTokens: 0 }
 			let finishReason = "stop"
+			// Tool calls arrive as fragments keyed by position: the first carries
+			// the id and the name, later ones append to the argument string. They
+			// are assembled here and emitted whole when the stream ends.
+			const partial = new Map<number, { id: string; name: string; args: string }>()
 
 			for await (const payload of sseLines(response)) {
 				if (payload === "[DONE]") break
@@ -130,6 +210,26 @@ export function createOpenAiCompatible(
 				if (choice?.finish_reason) finishReason = choice.finish_reason
 				const text = choice?.delta?.content
 				if (text) yield { type: "delta", text }
+
+				for (const [position, fragment] of (choice?.delta?.tool_calls ?? []).entries()) {
+					const index = fragment.index ?? position
+					const existing = partial.get(index) ?? { id: "", name: "", args: "" }
+					partial.set(index, {
+						id: fragment.id ?? existing.id,
+						name: fragment.function?.name ?? existing.name,
+						args: existing.args + (fragment.function?.arguments ?? ""),
+					})
+				}
+			}
+
+			for (const [index, call] of [...partial.entries()].sort((a, b) => a[0] - b[0])) {
+				if (!call.name) continue
+				const assembled: ToolCall = {
+					id: call.id || `call_${index}`,
+					name: call.name,
+					arguments: call.args || "{}",
+				}
+				yield { type: "tool_call", call: assembled }
 			}
 
 			yield { type: "done", usage, finishReason }

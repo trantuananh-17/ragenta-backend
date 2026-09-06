@@ -1,0 +1,56 @@
+import type { z } from "zod"
+
+import type { ToolDefinition } from "../../../ai/clients"
+
+/**
+ * What a tool is allowed to know about the run that called it.
+ *
+ * Deliberately small: a workspace, the run it belongs to and who started it.
+ * A tool never receives a session, a request or a database handle — anything it
+ * needs beyond this belongs to a domain service it calls, which does its own
+ * workspace scoping (`.claude/rules/security.md`).
+ */
+export interface ToolContext {
+	workspaceId: string
+	projectId: string | null
+	userId: string | null
+	runId: string
+	/** Which step of the run this call is, for the usage reference it writes. */
+	stepSeq: number
+	signal?: AbortSignal
+}
+
+/**
+ * What a tool gives back to the model.
+ *
+ * `content` is text, because that is what every provider's tool-result shape
+ * accepts and what the model actually reads. `ok: false` is not an exception:
+ * a tool that failed should tell the model so it can try something else, and
+ * throwing would end a run that is still perfectly able to continue.
+ */
+export interface ToolResult {
+	ok: boolean
+	content: string
+	/** Kept on the run step for the timeline, never sent to the model. */
+	metadata?: Record<string, unknown>
+	/** Provider spend this tool caused, to be charged by the runner. */
+	usage?: {
+		provider: string
+		model: string
+		inputTokens: number
+		outputTokens: number
+		operation: "embedding" | "rerank" | "agent"
+	}
+}
+
+export interface AgentTool {
+	name: string
+	/** What the model is told the tool does. This is the whole of its API docs. */
+	description: string
+	/** Validated against, and turned into the JSON Schema the model is given. */
+	parameters: z.ZodType
+	execute(context: ToolContext, args: unknown): Promise<ToolResult>
+}
+
+/** The tool as a provider needs to see it. */
+export type { ToolDefinition }

@@ -7,6 +7,7 @@ import type {
 	ProviderClient,
 	ProviderCredential,
 	TokenUsage,
+	ToolDefinition,
 } from "./types"
 import { readError, sseLines } from "./types"
 
@@ -30,23 +31,91 @@ const API_VERSION = "2023-06-01"
 const DEFAULT_MAX_TOKENS = 4096
 
 interface MessagesResponse {
-	content?: { type?: string; text?: string }[]
+	content?: {
+		type?: string
+		text?: string
+		id?: string
+		name?: string
+		input?: unknown
+	}[]
 	stop_reason?: string
 	usage?: { input_tokens?: number; output_tokens?: number }
 }
 
+/**
+ * Anthropic has no `tool` role: a tool's output is a `tool_result` block inside
+ * a **user** message, and consecutive results have to be merged into one message
+ * or the API rejects two user turns in a row. That merging is the only reason
+ * this is not a straight `map`.
+ */
 function split(messages: ChatMessage[]) {
 	const system = messages
 		.filter((message) => message.role === "system")
 		.map((message) => message.content)
 		.join("\n\n")
 
-	return {
-		system: system || undefined,
-		messages: messages
-			.filter((message) => message.role !== "system")
-			.map((message) => ({ role: message.role, content: message.content })),
+	const wire: { role: "user" | "assistant"; content: unknown }[] = []
+
+	for (const message of messages) {
+		if (message.role === "system") continue
+
+		if (message.role === "tool") {
+			const block = {
+				type: "tool_result" as const,
+				tool_use_id: message.toolCallId,
+				content: message.content,
+			}
+			const previous = wire.at(-1)
+			if (previous?.role === "user" && Array.isArray(previous.content)) {
+				previous.content.push(block)
+			} else {
+				wire.push({ role: "user", content: [block] })
+			}
+			continue
+		}
+
+		if (message.role === "assistant" && message.toolCalls?.length) {
+			const blocks: unknown[] = []
+			if (message.content) blocks.push({ type: "text", text: message.content })
+			for (const call of message.toolCalls) {
+				blocks.push({
+					type: "tool_use",
+					id: call.id,
+					name: call.name,
+					// The API wants a parsed object. A model that produced arguments
+					// which do not parse still has to be echoed something back, or the
+					// conversation cannot continue at all — an empty object is the
+					// least wrong choice, and the tool result beside it says what went
+					// wrong.
+					input: parseArguments(call.arguments),
+				})
+			}
+			wire.push({ role: "assistant", content: blocks })
+			continue
+		}
+
+		wire.push({ role: message.role, content: message.content })
 	}
+
+	return { system: system || undefined, messages: wire }
+}
+
+function parseArguments(raw: string): Record<string, unknown> {
+	try {
+		const parsed = JSON.parse(raw) as unknown
+		return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {}
+	} catch {
+		return {}
+	}
+}
+
+function toWireTools(tools: ToolDefinition[] | undefined) {
+	if (!tools?.length) return undefined
+	return tools.map((tool) => ({
+		name: tool.name,
+		description: tool.description,
+		input_schema: tool.parameters,
+	}))
 }
 
 function headers(credential: ProviderCredential) {
@@ -63,6 +132,7 @@ const base = (credential: ProviderCredential) =>
 export const anthropicClient: ProviderClient = {
 	id: "anthropic",
 	defaultBaseUrl: DEFAULT_BASE_URL,
+	supportsTools: true,
 
 	async chat(credential, request: ChatRequest): Promise<ChatResult> {
 		const { system, messages } = split(request.messages)
@@ -77,6 +147,7 @@ export const anthropicClient: ProviderClient = {
 				messages,
 				temperature: request.temperature,
 				max_tokens: request.maxTokens ?? DEFAULT_MAX_TOKENS,
+				tools: toWireTools(request.tools),
 			}),
 		})
 		if (!response.ok) throw await readError("anthropic", response)
@@ -87,6 +158,13 @@ export const anthropicClient: ProviderClient = {
 				.filter((block) => block.type === "text")
 				.map((block) => block.text ?? "")
 				.join(""),
+			toolCalls: (body.content ?? [])
+				.filter((block) => block.type === "tool_use" && block.name)
+				.map((block) => ({
+					id: block.id ?? "",
+					name: block.name ?? "",
+					arguments: JSON.stringify(block.input ?? {}),
+				})),
 			usage: {
 				inputTokens: body.usage?.input_tokens ?? 0,
 				outputTokens: body.usage?.output_tokens ?? 0,
@@ -108,6 +186,7 @@ export const anthropicClient: ProviderClient = {
 				messages,
 				temperature: request.temperature,
 				max_tokens: request.maxTokens ?? DEFAULT_MAX_TOKENS,
+				tools: toWireTools(request.tools),
 				stream: true,
 			}),
 		})
@@ -117,6 +196,10 @@ export const anthropicClient: ProviderClient = {
 		// on message_delta, so the two halves of the bill come from two events.
 		const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 }
 		let finishReason = "end_turn"
+		// A tool call is opened by `content_block_start`, filled by a run of
+		// `input_json_delta` fragments and closed by `content_block_stop`, all
+		// keyed by block index. It is emitted whole at the close.
+		const openCalls = new Map<number, { id: string; name: string; json: string }>()
 
 		for await (const payload of sseLines(response)) {
 			let event: Record<string, unknown>
@@ -133,10 +216,47 @@ export const anthropicClient: ProviderClient = {
 					usage.outputTokens = message?.usage?.output_tokens ?? 0
 					break
 				}
+				case "content_block_start": {
+					const block = event.content_block as
+						| { type?: string; id?: string; name?: string }
+						| undefined
+					if (block?.type === "tool_use" && block.name) {
+						openCalls.set(Number(event.index ?? 0), {
+							id: block.id ?? "",
+							name: block.name,
+							json: "",
+						})
+					}
+					break
+				}
 				case "content_block_delta": {
-					const delta = event.delta as { type?: string; text?: string } | undefined
+					const delta = event.delta as
+						| { type?: string; text?: string; partial_json?: string }
+						| undefined
 					if (delta?.type === "text_delta" && delta.text) {
 						yield { type: "delta", text: delta.text }
+					}
+					if (delta?.type === "input_json_delta") {
+						const open = openCalls.get(Number(event.index ?? 0))
+						if (open) open.json += delta.partial_json ?? ""
+					}
+					break
+				}
+				case "content_block_stop": {
+					const index = Number(event.index ?? 0)
+					const open = openCalls.get(index)
+					if (open) {
+						openCalls.delete(index)
+						yield {
+							type: "tool_call",
+							call: {
+								id: open.id || `call_${index}`,
+								name: open.name,
+								// A tool taking no arguments produces no fragments at all,
+								// and "" is not JSON.
+								arguments: open.json || "{}",
+							},
+						}
 					}
 					break
 				}
