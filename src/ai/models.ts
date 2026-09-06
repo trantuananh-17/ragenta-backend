@@ -15,7 +15,7 @@ import type { ModelTier } from "../modules/billing/plans"
  * fed from one place is deliberate: a model that can be picked but has no price,
  * or has a price but cannot be picked, is a billing hole.
  */
-export type ModelCapability = "chat" | "embedding"
+export type ModelCapability = "chat" | "embedding" | "rerank"
 
 export interface ModelDefinition {
 	provider: string
@@ -117,6 +117,91 @@ export const MODELS: ModelDefinition[] = [
 		rates: { input: 0, output: 0, embedding: 0.15 },
 		embeddingDimensions: 3072,
 	},
+	/**
+	 * OpenRouter embedding models.
+	 *
+	 * Only embeddings are shipped for this provider, and only the four whose
+	 * price *and* native vector width could both be confirmed. A knowledge base
+	 * freezes the width at creation and indexing fails outright if the vectors
+	 * come back a different size, so a guessed number here is worse than an
+	 * absent entry — which is why `voyageai/voyage-4` and the Gemini embedding
+	 * models, both of which publish a *range* of widths, are not in this list.
+	 *
+	 * Its chat models are deliberately absent. OpenRouter proxies hundreds of
+	 * them and the list changes weekly; a snapshot compiled into the build would
+	 * be stale on arrival and price a customer's turns wrongly. **Import models**
+	 * in the admin console pulls them instead, priced from OpenRouter's own
+	 * `/models` response — the numbers the vendor will actually invoice, rather
+	 * than numbers copied into this file by hand.
+	 *
+	 * Prices verified against openrouter.ai on 2026-09-06, in USD per million
+	 * tokens. OpenRouter takes a margin over the upstream vendor, so these are
+	 * not the same numbers as the direct entries above.
+	 */
+	{
+		provider: "openrouter",
+		model: "openai/text-embedding-3-small",
+		capability: "embedding",
+		tier: "economy",
+		rates: { input: 0, output: 0, embedding: 0.02 },
+		embeddingDimensions: 1536,
+	},
+	{
+		provider: "openrouter",
+		model: "openai/text-embedding-3-large",
+		capability: "embedding",
+		tier: "economy",
+		rates: { input: 0, output: 0, embedding: 0.13 },
+		embeddingDimensions: 3072,
+	},
+	{
+		provider: "openrouter",
+		model: "baai/bge-m3",
+		capability: "embedding",
+		tier: "economy",
+		rates: { input: 0, output: 0, embedding: 0.01 },
+		embeddingDimensions: 1024,
+	},
+	{
+		provider: "openrouter",
+		model: "mistralai/mistral-embed-2312",
+		capability: "embedding",
+		tier: "economy",
+		rates: { input: 0, output: 0, embedding: 0.1 },
+		embeddingDimensions: 1024,
+	},
+	/**
+	 * Rerankers. Providers price these per search rather than per token, so the
+	 * rate is carried in the `input` column as a token-equivalent: a rerank
+	 * request bills the passages it scored, and the numbers below are each
+	 * vendor's per-1k-search price spread over a 512-token passage. It is an
+	 * approximation and knowingly so — verify before a billing release, like
+	 * every other rate here.
+	 */
+	{
+		provider: "cohere",
+		model: "rerank-v3.5",
+		capability: "rerank",
+		tier: "economy",
+		rates: { input: 4, output: 0, embedding: 0 },
+		contextWindow: 4_096,
+	},
+	{
+		provider: "voyage",
+		model: "rerank-2.5",
+		capability: "rerank",
+		tier: "economy",
+		rates: { input: 0.05, output: 0, embedding: 0 },
+		contextWindow: 16_000,
+	},
+	{
+		provider: "jina",
+		model: "jina-reranker-v2-base-multilingual",
+		capability: "rerank",
+		tier: "economy",
+		rates: { input: 0.02, output: 0, embedding: 0 },
+		contextWindow: 8_192,
+	},
 ]
 
 /** Fallbacks for a workspace that has never chosen. Economy, so free works out of the box. */
@@ -125,6 +210,28 @@ export const DEFAULT_EMBEDDING = {
 	provider: "openai",
 	model: "text-embedding-3-small",
 } as const
+
+/**
+ * Which plan tier a model belongs to, from what it costs.
+ *
+ * Needed because an imported catalogue carries prices but no tier — the vendor
+ * has no idea how Ragenta's plans are drawn. The thresholds are chosen to
+ * reproduce the hand-written entries above rather than invented: Haiku (1 / 5)
+ * and gpt-4o-mini (0.15 / 0.6) come out economy, Sonnet (3 / 15) and gpt-4o
+ * (2.5 / 10) come out premium. A model at or below both numbers is economy.
+ *
+ * Erring towards `premium` is the safe direction: it narrows who may run a
+ * model, where the opposite would let an expensive one onto a cheaper plan.
+ */
+const ECONOMY_INPUT_CEILING = 1
+const ECONOMY_OUTPUT_CEILING = 5
+
+export function tierFor(inputPerMillion: number, outputPerMillion: number): ModelTier {
+	return inputPerMillion <= ECONOMY_INPUT_CEILING &&
+		outputPerMillion <= ECONOMY_OUTPUT_CEILING
+		? "economy"
+		: "premium"
+}
 
 export function modelKey(provider: string, model: string): string {
 	return `${provider}:${model}`

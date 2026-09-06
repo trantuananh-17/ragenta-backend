@@ -2,7 +2,12 @@ import { and, asc, count, desc, eq } from "drizzle-orm"
 
 import { db } from "../../db/client"
 import type { DbExecutor } from "../../db/client"
-import { conversation, knowledgeBase, message } from "../../db/schema"
+import {
+	conversation,
+	conversationKnowledgeBase,
+	knowledgeBase,
+	message,
+} from "../../db/schema"
 import type { PaginationQuery } from "../../shared/pagination"
 
 export type ConversationRow = typeof conversation.$inferSelect
@@ -94,6 +99,38 @@ export const chatRepository = {
 			)
 			.returning({ id: conversation.id })
 		return rows.length > 0
+	},
+
+	/**
+	 * The additional knowledge bases a conversation searches, beyond its primary
+	 * one. Returned as ids only — the caller reads each base to check ownership
+	 * and to compare embedding models, and a join here would return rows it would
+	 * then have to re-read anyway.
+	 */
+	async listConversationBaseIds(conversationId: string, executor: DbExecutor = db) {
+		const rows = await executor
+			.select({ knowledgeBaseId: conversationKnowledgeBase.knowledgeBaseId })
+			.from(conversationKnowledgeBase)
+			.where(eq(conversationKnowledgeBase.conversationId, conversationId))
+		return rows.map((row) => row.knowledgeBaseId)
+	},
+
+	/** Replaces the set. One transaction, so a half-written set is never queried. */
+	async setConversationBaseIds(
+		conversationId: string,
+		knowledgeBaseIds: string[],
+		executor: DbExecutor = db,
+	) {
+		await executor.transaction(async (tx) => {
+			await tx
+				.delete(conversationKnowledgeBase)
+				.where(eq(conversationKnowledgeBase.conversationId, conversationId))
+			if (knowledgeBaseIds.length > 0) {
+				await tx
+					.insert(conversationKnowledgeBase)
+					.values(knowledgeBaseIds.map((knowledgeBaseId) => ({ conversationId, knowledgeBaseId })))
+			}
+		})
 	},
 
 	/** Oldest first: the order a transcript is read in and the order a prompt needs. */

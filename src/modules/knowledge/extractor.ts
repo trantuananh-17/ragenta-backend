@@ -19,6 +19,13 @@ export interface ExtractedSection {
 	text: string
 	/** Where it came from — a page number, a heading. Shown with a citation. */
 	position: string
+	/**
+	 * 1-based page, for formats that have pages. Carried separately from
+	 * `position` because a page *range* is stored on the chunk and used to split
+	 * a large document into bounded ingestion tasks — parsing a string back out
+	 * of "page 12" to do that would be absurd.
+	 */
+	page?: number
 }
 
 const MAX_TEXT_BYTES = 32 * 1024 * 1024
@@ -31,6 +38,8 @@ export const SUPPORTED_MIME_TYPES: Record<string, string> = {
 	"application/json": "json",
 	"application/pdf": "pdf",
 	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+	"message/rfc822": "eml",
+	"text/tab-separated-values": "tsv",
 }
 
 /**
@@ -49,7 +58,7 @@ export function resolveFormat(mimeType: string, filename: string): string {
 	const format = byMime ?? byExtension
 	if (!format) {
 		throw new ValidationError(
-			`Ragenta cannot read ${filename}. Supported formats: PDF, DOCX, TXT, Markdown, HTML, CSV, JSON.`,
+			`Ragenta cannot read ${filename}. Supported formats: PDF, DOCX, TXT, Markdown, HTML, CSV, TSV, JSON, EML.`,
 			{ mimeType, filename },
 		)
 	}
@@ -92,22 +101,59 @@ function htmlToText(html: string): string {
  * `column: value` pairs. A bare row of values retrieves badly — the numbers
  * match nothing and the words have lost what they are about.
  */
-function csvToSections(text: string): ExtractedSection[] {
-	const lines = text.split("\n").filter((line) => line.trim().length > 0)
-	if (lines.length === 0) return []
+export function parseDelimited(text: string, separator = ","): string[][] {
+	const rows: string[][] = []
+	let row: string[] = []
+	let cell = ""
+	let quoted = false
 
-	const split = (line: string) =>
-		// Good enough for the common case, including quoted fields containing
-		// commas. A CSV with embedded newlines inside quotes is not handled, and
-		// would show up as short rows rather than as corruption.
-		(line.match(/("([^"]|"")*"|[^,]*)(,|$)/g) ?? [])
-			.map((cell) => cell.replace(/,$/, "").trim().replace(/^"|"$/g, ""))
-			.filter((_, index, all) => index < all.length - 1 || all[index] !== "")
+	// Character by character rather than a line split, because a quoted field may
+	// contain the separator *and* a newline, and a row-first parse corrupts both.
+	for (let index = 0; index < text.length; index += 1) {
+		const character = text[index]
 
-	const header = split(lines[0] ?? "")
+		if (quoted) {
+			if (character === '"') {
+				if (text[index + 1] === '"') {
+					cell += '"'
+					index += 1
+				} else {
+					quoted = false
+				}
+			} else {
+				cell += character
+			}
+			continue
+		}
 
-	return lines.slice(1).map((line, index) => ({
-		text: split(line)
+		if (character === '"' && cell.length === 0) {
+			quoted = true
+		} else if (character === separator) {
+			row.push(cell.trim())
+			cell = ""
+		} else if (character === "\n") {
+			row.push(cell.trim())
+			if (row.some((value) => value.length > 0)) rows.push(row)
+			row = []
+			cell = ""
+		} else {
+			cell += character
+		}
+	}
+
+	row.push(cell.trim())
+	if (row.some((value) => value.length > 0)) rows.push(row)
+
+	return rows
+}
+
+function csvToSections(text: string, separator = ","): ExtractedSection[] {
+	const rows = parseDelimited(text, separator)
+	const header = rows[0]
+	if (!header) return []
+
+	return rows.slice(1).map((values, index) => ({
+		text: values
 			.map((value, column) => `${header[column] ?? `column ${column + 1}`}: ${value}`)
 			.join("\n"),
 		position: `row ${index + 2}`,
@@ -121,8 +167,19 @@ async function pdfToSections(bytes: Buffer): Promise<ExtractedSection[]> {
 
 	const pages = Array.isArray(text) ? text : [text]
 	return pages
-		.map((page, index) => ({ text: page.trim(), position: `page ${index + 1}` }))
+		.map((page, index) => ({
+			text: page.trim(),
+			position: `page ${index + 1}`,
+			page: index + 1,
+		}))
 		.filter((section) => section.text.length > 0)
+}
+
+/** How many pages a PDF has, without extracting a word of it. */
+export async function countPdfPages(bytes: Buffer): Promise<number> {
+	const { getDocumentProxy } = await import("unpdf")
+	const document = await getDocumentProxy(new Uint8Array(bytes))
+	return document.numPages
 }
 
 async function docxToSections(bytes: Buffer): Promise<ExtractedSection[]> {
@@ -160,6 +217,13 @@ export async function extractSections(
 			return splitParagraphs(htmlToText(decodeText(bytes)))
 		case "csv":
 			return csvToSections(decodeText(bytes))
+		case "tsv":
+			return csvToSections(decodeText(bytes), "\t")
+		case "eml":
+			// Headers first, then the body split at blank lines: an email's From,
+			// To and Subject are the part a question usually matches, and losing
+			// them into a chunk boundary loses what the mail was about.
+			return splitParagraphs(decodeText(bytes))
 		case "json":
 			// Re-serialised rather than passed through: minified JSON is one line
 			// with no boundaries to chunk on, and indenting it gives the chunker

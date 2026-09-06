@@ -12,6 +12,7 @@ import {
 } from "../modules/chat/chat.dto"
 import {
 	createKnowledgeBaseSchema,
+	reindexDocumentSchema,
 	updateKnowledgeBaseSchema,
 } from "../modules/knowledge/knowledge.dto"
 import { updateModelSettingsSchema } from "../modules/model/model.dto"
@@ -309,6 +310,12 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		query: paginationQuerySchema,
 	},
 
+	"GET /v1/workspaces/:workspaceId/knowledge-bases/chunking-methods": {
+		summary:
+			"The chunking strategies this deployment offers, the formats each reads, and why an unavailable one is unavailable",
+		tags: ["Knowledge"],
+		access: "any member",
+	},
 	"GET /v1/workspaces/:workspaceId/knowledge-bases": {
 		summary: "List knowledge bases",
 		tags: ["Knowledge"],
@@ -329,7 +336,8 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		access: "any member",
 	},
 	"PATCH /v1/workspaces/:workspaceId/knowledge-bases/:baseId": {
-		summary: "Rename or re-describe a knowledge base",
+		summary:
+			"Edit a knowledge base. Retrieval settings apply at once; chunking settings apply to documents re-indexed after the change",
 		tags: ["Knowledge"],
 		access: "owner, admin, member",
 		body: updateKnowledgeBaseSchema,
@@ -348,7 +356,7 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 	},
 	"POST /v1/workspaces/:workspaceId/knowledge-bases/:baseId/documents": {
 		summary:
-			"Upload a document as multipart/form-data under `file`. Returns the pending row; indexing runs in the worker",
+			"Upload a document as multipart/form-data under `file`, optionally with `parserId` and a JSON `parserConfig` overriding the base's. Returns the pending row; indexing runs in the worker",
 		tags: ["Knowledge"],
 		access: "owner, admin, member",
 		status: 201,
@@ -369,8 +377,22 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		access: "any member",
 		query: paginationQuerySchema,
 	},
+	"GET /v1/workspaces/:workspaceId/documents/:documentId/tasks": {
+		summary:
+			"The ingestion plan: one row per page range, with its digest, status and whether it was reused from the last run",
+		tags: ["Knowledge"],
+		access: "any member",
+	},
 	"POST /v1/workspaces/:workspaceId/documents/:documentId/reindex": {
-		summary: "Queue the document again. Re-embedding costs credits",
+		summary:
+			"Queue the document again, optionally changing its chunking method. Ranges whose settings did not change are reused rather than re-embedded, so only what changed costs credits",
+		tags: ["Knowledge"],
+		access: "owner, admin, member",
+		body: reindexDocumentSchema,
+	},
+	"POST /v1/workspaces/:workspaceId/documents/:documentId/cancel": {
+		summary:
+			"Ask the worker to stop between stages. Passages already indexed are kept — they were paid for",
 		tags: ["Knowledge"],
 		access: "owner, admin, member",
 	},
@@ -431,6 +453,12 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		access: "owner, admin, member",
 		body: sendMessageSchema,
 	},
+	"POST /v1/workspaces/:workspaceId/conversations/:conversationId/messages/:messageId/stop": {
+		summary:
+			"Stop a turn that is generating. The partial answer is saved and the stream ends with its normal `done` frame, so the text already on screen survives",
+		tags: ["Chat"],
+		access: "owner, admin, member",
+	},
 
 	"GET /v1/admin/providers": {
 		summary: "Providers, credential state (masked) and the merged model catalogue",
@@ -450,6 +478,12 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 	},
 	"POST /v1/admin/providers/:provider/check": {
 		summary: "Call the provider with the stored key. Answers 200 with ok=false on rejection",
+		tags: ["Admin"],
+		access: "platform admin",
+	},
+	"POST /v1/admin/providers/:provider/models/import": {
+		summary:
+			"Import the provider's own catalogue, priced from its own API. Offered only where a provider publishes prices machine-readably — OpenRouter today. Upserts, never deletes, so re-running it refreshes prices",
 		tags: ["Admin"],
 		access: "platform admin",
 	},

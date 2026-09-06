@@ -61,15 +61,70 @@ export interface CheckResult {
 	models?: string[]
 }
 
+export interface RerankRequest {
+	model: string
+	query: string
+	documents: string[]
+	topN: number
+	signal?: AbortSignal
+}
+
+export interface RerankResult {
+	/** Index into the request's `documents`, with the model's own relevance score. */
+	scores: Array<{ index: number; score: number }>
+	/**
+	 * What the provider says it charged for, in tokens. Rerankers price per
+	 * search rather than per token and most report nothing, so this is usually
+	 * the local estimate — `estimated` says which.
+	 */
+	tokens: number
+	estimated: boolean
+}
+
+/**
+ * Every capability is optional because a provider may have only one. Cohere,
+ * Voyage and Jina sell reranking and nothing Ragenta needs; requiring them to
+ * declare a `chat` method would mean writing three that throw, and a method that
+ * exists but always fails is worse than one that is absent — the caller can test
+ * for absent.
+ */
+/**
+ * A model a provider says it has, priced by the provider itself.
+ *
+ * This is the difference between a catalogue that is right and one that was
+ * right when someone typed it. Every rate in `src/ai/models.ts` is a number
+ * copied by hand and is carried as known debt; a provider that publishes its own
+ * prices can be asked instead, and a gateway proxying hundreds of models that
+ * change weekly can only be handled that way.
+ */
+export interface ListedModel {
+	id: string
+	capability: "chat" | "embedding" | "rerank"
+	/** USD per million tokens, converted from whatever unit the provider quotes. */
+	inputPerMillion: number
+	outputPerMillion: number
+	embeddingPerMillion: number
+	contextWindow?: number
+	embeddingDimensions?: number
+}
+
 export interface ProviderClient {
 	readonly id: string
 	readonly defaultBaseUrl: string
-	chat(credential: ProviderCredential, request: ChatRequest): Promise<ChatResult>
-	streamChat(
+	chat?(credential: ProviderCredential, request: ChatRequest): Promise<ChatResult>
+	streamChat?(
 		credential: ProviderCredential,
 		request: ChatRequest,
 	): AsyncGenerator<ChatStreamEvent>
 	embed?(credential: ProviderCredential, request: EmbedRequest): Promise<EmbedResult>
+	rerank?(credential: ProviderCredential, request: RerankRequest): Promise<RerankResult>
+	/**
+	 * The provider's own catalogue, with its own prices. Present only where the
+	 * provider publishes prices machine-readably — a list of model names with no
+	 * rates is worse than nothing here, because a model priced at zero is a model
+	 * customers run for free.
+	 */
+	listModels?(credential: ProviderCredential): Promise<ListedModel[]>
 	/** One cheap live call proving the key works. Throws ProviderError when it does not. */
 	check(credential: ProviderCredential): Promise<CheckResult>
 }

@@ -20,6 +20,17 @@ knowledgeRoutes.use("*", requireAuth)
 
 const contributor = requireWorkspaceRole("owner", "admin", "member")
 
+/**
+ * The chunking strategies this deployment offers. Workspace-scoped only so it
+ * sits under the same prefix as everything else — the list is the same for every
+ * workspace, because it is a property of the build.
+ */
+knowledgeRoutes.get(
+	"/:workspaceId/knowledge-bases/chunking-methods",
+	workspaceScope,
+	knowledgeController.listParsers,
+)
+
 knowledgeRoutes.get(
 	"/:workspaceId/knowledge-bases",
 	workspaceScope,
@@ -76,11 +87,22 @@ knowledgeRoutes.get(
 	workspaceScope,
 	knowledgeController.listChunks,
 )
+knowledgeRoutes.get(
+	"/:workspaceId/documents/:documentId/tasks",
+	workspaceScope,
+	knowledgeController.listTasks,
+)
 knowledgeRoutes.post(
 	"/:workspaceId/documents/:documentId/reindex",
 	workspaceScope,
 	contributor,
 	knowledgeController.reindexDocument,
+)
+knowledgeRoutes.post(
+	"/:workspaceId/documents/:documentId/cancel",
+	workspaceScope,
+	contributor,
+	knowledgeController.cancelDocument,
 )
 knowledgeRoutes.delete(
 	"/:workspaceId/documents/:documentId",

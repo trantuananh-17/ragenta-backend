@@ -1,6 +1,7 @@
 import { findCatalogueModel, requireCredential } from "../../ai/catalogue"
-import { providerClient } from "../../ai/clients"
-import type { ChatMessage, ProviderClient } from "../../ai/clients"
+import { chatCapableClient } from "../../ai/clients"
+import type { ChatCapableClient, ChatMessage, TokenUsage } from "../../ai/clients"
+import { estimateTokens } from "../../ai/tokens"
 import type { MessageCitation } from "../../db/schema"
 import { EntitlementError, NotFoundError, ValidationError } from "../../shared/errors"
 import { newId } from "../../shared/id"
@@ -11,11 +12,17 @@ import { billingService } from "../billing/billing.service"
 import { knowledgeService } from "../knowledge/knowledge.service"
 import { modelService } from "../model/model.service"
 import { retrievalService } from "../retrieval/retrieval.service"
-import type { RetrievedChunk } from "../retrieval/retrieval.service"
+import type {
+	RetrievalOutcome,
+	RetrievedChunk,
+	SearchMode,
+} from "../retrieval/retrieval.service"
+import { resolveRerankModel } from "../../ai/rerank"
 import { usageService } from "../usage/usage.service"
 import { chatRepository } from "./chat.repository"
 import type { ConversationRow } from "./chat.repository"
 import { assemblePrompt } from "./prompt"
+import { clearStop, isStopRequested, requestStop } from "./stop-signal"
 import type {
 	CreateConversationInput,
 	SendMessageInput,
@@ -43,13 +50,24 @@ const FALLBACK_CONTEXT_WINDOW = 32_000
 const MINIMUM_CREDITS = 5_000
 
 /**
+ * How often a generating turn asks whether it has been told to stop.
+ *
+ * A Redis round trip per token would cost more than the generation it watches;
+ * a third of a second is below what anyone perceives as a delay on a button.
+ */
+const STOP_POLL_MS = 300
+
+/**
  * Everything one turn needs, resolved before generation starts. Named rather
  * than inferred from `prepareTurn`, because a service method that referred to
  * its own return type would make the whole object's type circular.
  */
 export interface PreparedTurn {
-	conversation: ConversationRow
-	client: ProviderClient
+	conversation: ConversationRow & { additionalKnowledgeBaseIds: string[] }
+	/** Charged with the turn, when a reranker ran. Null when none was configured. */
+	rerankUsage: RetrievalOutcome["rerankUsage"]
+	/** Narrowed at `prepareTurn`: a provider with no chat adapter is refused there. */
+	client: ChatCapableClient
 	selection: { provider: string; model: string }
 	messages: ChatMessage[]
 	citations: MessageCitation[]
@@ -59,9 +77,18 @@ export interface PreparedTurn {
 }
 
 export type ChatStreamEvent =
+	/** Sent before any token, so the client can ask for this turn to stop. */
+	| { type: "start"; messageId: string }
 	| { type: "citations"; citations: MessageCitation[] }
 	| { type: "delta"; text: string }
-	| { type: "done"; messageId: string; credits: number; usage: { input: number; output: number } }
+	| {
+			type: "done"
+			messageId: string
+			/** True when the answer is as long as it is because the user said so. */
+			stopped: boolean
+			credits: number
+			usage: { input: number; output: number }
+		}
 	| { type: "error"; message: string }
 
 export const chatService = {
@@ -77,7 +104,43 @@ export const chatService = {
 	async getConversation(workspaceId: string, conversationId: string) {
 		const row = await chatRepository.findConversation(workspaceId, conversationId)
 		if (!row) throw new NotFoundError("Conversation")
-		return row
+		return {
+			...row,
+			additionalKnowledgeBaseIds: await chatRepository.listConversationBaseIds(row.id),
+		}
+	},
+
+	/**
+	 * Proves every knowledge base belongs to this workspace, and that they can be
+	 * searched together.
+	 *
+	 * The ids came from the client and nothing else here would check them. The
+	 * embedding comparison is the second half: two bases embedded with different
+	 * models produce vectors that are not comparable, so searching them together
+	 * would not degrade the ranking, it would invent one. Refusing at the point
+	 * the set is chosen is the only place a user can act on it.
+	 */
+	async assertBasesSearchableTogether(workspaceId: string, baseIds: string[]) {
+		const unique = [...new Set(baseIds)]
+		if (unique.length === 0) return
+
+		const bases = await Promise.all(
+			unique.map((baseId) => knowledgeService.getBase(workspaceId, baseId)),
+		)
+
+		const primary = bases[0]
+		if (!primary) return
+
+		const mismatched = bases.find(
+			(base) =>
+				base.embeddingProvider !== primary.embeddingProvider ||
+				base.embeddingModel !== primary.embeddingModel,
+		)
+		if (mismatched) {
+			throw new ValidationError(
+				`"${mismatched.name}" and "${primary.name}" use different embedding models, so one conversation cannot search both. Use separate conversations, or rebuild one of them on the other's model.`,
+			)
+		}
 	},
 
 	async createConversation(
@@ -85,20 +148,40 @@ export const chatService = {
 		input: CreateConversationInput,
 		actorId: string,
 	) {
-		// Proves the knowledge base belongs to this workspace before it is stored:
-		// the id came from the client, and nothing else here would check it.
-		if (input.knowledgeBaseId) {
-			await knowledgeService.getBase(workspaceId, input.knowledgeBaseId)
+		const baseIds = [
+			...(input.knowledgeBaseId ? [input.knowledgeBaseId] : []),
+			...input.additionalKnowledgeBaseIds,
+		]
+		await this.assertBasesSearchableTogether(workspaceId, baseIds)
+		if (input.rerank) {
+			await resolveRerankModel(input.rerank.provider, input.rerank.model)
 		}
 
-		return chatRepository.insertConversation({
+		const created = await chatRepository.insertConversation({
 			id: newId(),
 			organizationId: workspaceId,
 			projectId: input.projectId,
 			knowledgeBaseId: input.knowledgeBaseId,
 			title: input.title,
+			searchMode: input.searchMode ?? "hybrid",
+			topK: input.topK ?? null,
+			similarityThreshold: input.similarityThreshold?.toFixed(3) ?? null,
+			vectorWeight: input.vectorWeight?.toFixed(3) ?? null,
+			rerankProvider: input.rerank?.provider ?? null,
+			rerankModel: input.rerank?.model ?? null,
 			createdBy: actorId,
 		})
+
+		if (created && input.additionalKnowledgeBaseIds.length > 0) {
+			await chatRepository.setConversationBaseIds(
+				created.id,
+				// The primary base is stored on the conversation row; keeping it in
+				// the join table too would make "how many extra bases" ambiguous.
+				input.additionalKnowledgeBaseIds.filter((id) => id !== input.knowledgeBaseId),
+			)
+		}
+
+		return { ...created, additionalKnowledgeBaseIds: input.additionalKnowledgeBaseIds }
 	},
 
 	async updateConversation(
@@ -106,16 +189,53 @@ export const chatService = {
 		conversationId: string,
 		input: UpdateConversationInput,
 	) {
-		if (input.knowledgeBaseId) {
-			await knowledgeService.getBase(workspaceId, input.knowledgeBaseId)
+		const existing = await this.getConversation(workspaceId, conversationId)
+
+		const primaryId =
+			input.knowledgeBaseId === undefined ? existing.knowledgeBaseId : input.knowledgeBaseId
+		const additional = input.additionalKnowledgeBaseIds ?? existing.additionalKnowledgeBaseIds
+		await this.assertBasesSearchableTogether(workspaceId, [
+			...(primaryId ? [primaryId] : []),
+			...additional,
+		])
+		if (input.rerank) {
+			await resolveRerankModel(input.rerank.provider, input.rerank.model)
 		}
-		const updated = await chatRepository.updateConversation(
-			workspaceId,
-			conversationId,
-			input,
-		)
+
+		const updated = await chatRepository.updateConversation(workspaceId, conversationId, {
+			...(input.title !== undefined ? { title: input.title } : {}),
+			...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+			...(input.knowledgeBaseId !== undefined
+				? { knowledgeBaseId: input.knowledgeBaseId }
+				: {}),
+			...(input.searchMode !== undefined ? { searchMode: input.searchMode } : {}),
+			...(input.topK !== undefined ? { topK: input.topK } : {}),
+			...(input.similarityThreshold !== undefined
+				? { similarityThreshold: input.similarityThreshold?.toFixed(3) ?? null }
+				: {}),
+			...(input.vectorWeight !== undefined
+				? { vectorWeight: input.vectorWeight?.toFixed(3) ?? null }
+				: {}),
+			...(input.rerank !== undefined
+				? {
+						rerankProvider: input.rerank?.provider ?? null,
+						rerankModel: input.rerank?.model ?? null,
+					}
+				: {}),
+		})
 		if (!updated) throw new NotFoundError("Conversation")
-		return updated
+
+		if (input.additionalKnowledgeBaseIds !== undefined) {
+			await chatRepository.setConversationBaseIds(
+				conversationId,
+				input.additionalKnowledgeBaseIds.filter((id) => id !== primaryId),
+			)
+		}
+
+		return {
+			...updated,
+			additionalKnowledgeBaseIds: await chatRepository.listConversationBaseIds(conversationId),
+		}
 	},
 
 	async deleteConversation(workspaceId: string, conversationId: string) {
@@ -169,30 +289,61 @@ export const chatService = {
 		}
 
 		const definition = await findCatalogueModel(selection.provider, selection.model)
-		const client = providerClient(selection.provider)
-		if (!client) {
+		const client = chatCapableClient(selection.provider)
+		// A provider may have an adapter for only some capabilities — the rerank
+		// providers have no chat method at all — so the check is for the method,
+		// not for the client.
+		if (!client?.streamChat) {
 			throw new ValidationError(
-				`This deployment has no client for the ${selection.provider} provider.`,
+				`This deployment cannot run chat with the ${selection.provider} provider.`,
 			)
 		}
 
+		const baseIds = [
+			...(conversation.knowledgeBaseId ? [conversation.knowledgeBaseId] : []),
+			...conversation.additionalKnowledgeBaseIds,
+		]
+
 		let retrieved: RetrievedChunk[] = []
-		if (conversation.knowledgeBaseId) {
-			retrieved = await retrievalService.retrieve({
+		let rerankUsage: RetrievalOutcome["rerankUsage"] = null
+
+		if (baseIds.length > 0) {
+			const outcome = await retrievalService.retrieve({
 				workspaceId,
-				knowledgeBaseId: conversation.knowledgeBaseId,
+				knowledgeBaseIds: baseIds,
 				question: input.content,
-				topK: input.topK,
+				// Per-turn override, then the thread's setting, then the base's.
+				topK: input.topK ?? conversation.topK ?? undefined,
+				mode: input.searchMode ?? (conversation.searchMode as SearchMode),
+				similarityThreshold:
+					input.similarityThreshold ??
+					(conversation.similarityThreshold === null
+						? undefined
+						: Number(conversation.similarityThreshold)),
+				vectorWeight:
+					input.vectorWeight ??
+					(conversation.vectorWeight === null
+						? undefined
+						: Number(conversation.vectorWeight)),
+				rerank:
+					conversation.rerankProvider && conversation.rerankModel
+						? { provider: conversation.rerankProvider, model: conversation.rerankModel }
+						: undefined,
 				documentIds: input.documentIds,
 			})
+			retrieved = outcome.chunks
+			rerankUsage = outcome.rerankUsage
 		}
 
 		const history = (
 			await chatRepository.listRecentMessages(conversationId, HISTORY_TURNS * 2)
 		)
 			// A failed turn left its error on the row and no useful content; feeding
-			// it back would teach the model that failing is a normal answer.
-			.filter((row) => row.status === "complete")
+			// it back would teach the model that failing is a normal answer. A
+			// stopped one is different: it is a real, shorter answer the user read,
+			// and dropping it from the history would make the next turn respond to a
+			// conversation that never happened.
+			.filter((row) => row.status === "complete" || row.status === "stopped")
 			.map<ChatMessage>((row) => ({
 				role: row.role === "assistant" ? "assistant" : "user",
 				content: row.content,
@@ -210,6 +361,9 @@ export const chatService = {
 			documentName: entry.documentName,
 			snippet: entry.content.slice(0, 400),
 			score: Number(entry.score.toFixed(4)),
+			kind: entry.kind,
+			fromPage: entry.fromPage,
+			toPage: entry.toPage,
 		}))
 
 		const userMessage = await chatRepository.insertMessage({
@@ -229,6 +383,7 @@ export const chatService = {
 			selection,
 			messages,
 			citations,
+			rerankUsage,
 			userMessageId: userMessage?.id ?? newId(),
 			assistantMessageId,
 			actorId,
@@ -253,14 +408,140 @@ export const chatService = {
 		turn: PreparedTurn,
 		signal?: AbortSignal,
 	): AsyncGenerator<ChatStreamEvent> {
+		// First, before a token exists: the client needs this id to ask for the
+		// turn to stop, and it needs it early enough that pressing stop half a
+		// second in already works.
+		yield { type: "start", messageId: turn.assistantMessageId }
 		yield { type: "citations", citations: turn.citations }
 
 		const credential = await requireCredential(turn.selection.provider)
 		let answer = ""
 		let usage = { inputTokens: 0, outputTokens: 0 }
 		let failure: string | undefined
+		let stopped = false
+		let outcome: { credits: number; usage: TokenUsage } | undefined
+
+		/**
+		 * Writes the turn, once, whatever ended it.
+		 *
+		 * This runs in a `finally` rather than after the loop because a generator
+		 * suspended at a `yield` is closed by `.return()` when its consumer stops
+		 * iterating — a dropped connection, a closed tab — and a `return`
+		 * completion is not an exception, so nothing after the loop would run. The
+		 * answer already streamed to the user would then exist nowhere.
+		 */
+		const persist = async () => {
+			if (outcome) return
+			outcome = { credits: 0, usage }
+
+			// The reranker ran before a token was generated, so it is charged
+			// whether or not the answer succeeded — the call was made either way.
+			if (turn.rerankUsage && turn.rerankUsage.tokens > 0) {
+				await usageService.recordAndCharge({
+					workspaceId,
+					projectId: turn.conversation.projectId,
+					userId: turn.actorId,
+					operation: "rerank",
+					provider: turn.rerankUsage.provider,
+					model: turn.rerankUsage.model,
+					inputTokens: turn.rerankUsage.tokens,
+					reference: `rerank:${turn.assistantMessageId}`,
+					metadata: {
+						conversationId: turn.conversation.id,
+						tokensEstimated: turn.rerankUsage.estimated,
+					},
+				})
+			}
+
+			if (answer.length === 0) {
+				// Nothing was generated. A stop this early is not a failure — the
+				// user asked for it — so it is recorded as one, not as an error the
+				// UI should apologise for.
+				await chatRepository.insertMessage({
+					id: turn.assistantMessageId,
+					organizationId: workspaceId,
+					conversationId: turn.conversation.id,
+					role: "assistant",
+					content: "",
+					citations: turn.citations,
+					provider: turn.selection.provider,
+					model: turn.selection.model,
+					status: stopped ? "stopped" : "failed",
+					error: stopped ? null : (failure?.slice(0, 500) ?? "The provider returned nothing."),
+					userId: turn.actorId,
+				})
+				return
+			}
+
+			/**
+			 * A turn that ended early never received the provider's usage frame, so
+			 * the real counts are unknown — but the provider generated the tokens
+			 * and charged Ragenta for them, so passing on nothing would make "stop"
+			 * a way to read answers for free. They are estimated, and the usage row
+			 * records that they were.
+			 */
+			const estimated = usage.inputTokens === 0 && usage.outputTokens === 0
+			const billed = estimated
+				? {
+						inputTokens: turn.messages.reduce(
+							(total, message) => total + estimateTokens(message.content),
+							0,
+						),
+						outputTokens: estimateTokens(answer),
+					}
+				: usage
+
+			const charge = await usageService.recordAndCharge({
+				workspaceId,
+				projectId: turn.conversation.projectId,
+				userId: turn.actorId,
+				operation: "chat",
+				provider: turn.selection.provider,
+				model: turn.selection.model,
+				inputTokens: billed.inputTokens,
+				outputTokens: billed.outputTokens,
+				reference: `chat:${turn.assistantMessageId}`,
+				metadata: {
+					conversationId: turn.conversation.id,
+					knowledgeBaseId: turn.conversation.knowledgeBaseId,
+					citations: turn.citations.length,
+					stopped,
+					tokensEstimated: estimated,
+				},
+			})
+
+			await chatRepository.insertMessage({
+				id: turn.assistantMessageId,
+				organizationId: workspaceId,
+				conversationId: turn.conversation.id,
+				role: "assistant",
+				content: answer,
+				citations: turn.citations,
+				provider: turn.selection.provider,
+				model: turn.selection.model,
+				inputTokens: billed.inputTokens,
+				outputTokens: billed.outputTokens,
+				credits: charge.credits.toFixed(4),
+				// A partial answer is a real answer: the user read it, the provider
+				// generated it, and it stays in the thread and in the model's history.
+				// `stopped` distinguishes "the user chose this length" from a failure.
+				status: stopped ? "stopped" : "complete",
+				error: failure ? failure.slice(0, 500) : null,
+				userId: turn.actorId,
+			})
+
+			await chatRepository.updateConversation(workspaceId, turn.conversation.id, {
+				lastMessageAt: new Date(),
+			})
+
+			outcome = { credits: charge.credits, usage: billed }
+		}
 
 		try {
+			// Checked between tokens rather than per token: a Redis round trip on
+			// every delta would cost more than the generation it is watching.
+			let nextStopCheck = Date.now() + STOP_POLL_MS
+
 			for await (const event of turn.client.streamChat(credential, {
 				model: turn.selection.model,
 				messages: turn.messages,
@@ -273,6 +554,20 @@ export const chatService = {
 				} else {
 					usage = event.usage
 				}
+
+				if (Date.now() >= nextStopCheck) {
+					nextStopCheck = Date.now() + STOP_POLL_MS
+					if (
+						await isStopRequested(
+							workspaceId,
+							turn.conversation.id,
+							turn.assistantMessageId,
+						)
+					) {
+						stopped = true
+						break
+					}
+				}
 			}
 		} catch (error) {
 			failure = error instanceof Error ? error.message : "The provider call failed."
@@ -280,75 +575,46 @@ export const chatService = {
 				workspaceId,
 				conversationId: turn.conversation.id,
 			})
+		} finally {
+			await persist()
+			await clearStop(workspaceId, turn.conversation.id, turn.assistantMessageId)
 		}
 
-		let credits = 0
-
 		if (failure && answer.length === 0) {
-			await chatRepository.insertMessage({
-				id: turn.assistantMessageId,
-				organizationId: workspaceId,
-				conversationId: turn.conversation.id,
-				role: "assistant",
-				content: "",
-				citations: turn.citations,
-				provider: turn.selection.provider,
-				model: turn.selection.model,
-				status: "failed",
-				error: failure.slice(0, 500),
-				userId: turn.actorId,
-			})
 			yield { type: "error", message: failure }
 			return
 		}
 
-		const charge = await usageService.recordAndCharge({
-			workspaceId,
-			projectId: turn.conversation.projectId,
-			userId: turn.actorId,
-			operation: "chat",
-			provider: turn.selection.provider,
-			model: turn.selection.model,
-			inputTokens: usage.inputTokens,
-			outputTokens: usage.outputTokens,
-			reference: `chat:${turn.assistantMessageId}`,
-			metadata: {
-				conversationId: turn.conversation.id,
-				knowledgeBaseId: turn.conversation.knowledgeBaseId,
-				citations: turn.citations.length,
-			},
-		})
-		credits = charge.credits
-
-		await chatRepository.insertMessage({
-			id: turn.assistantMessageId,
-			organizationId: workspaceId,
-			conversationId: turn.conversation.id,
-			role: "assistant",
-			content: answer,
-			citations: turn.citations,
-			provider: turn.selection.provider,
-			model: turn.selection.model,
-			inputTokens: usage.inputTokens,
-			outputTokens: usage.outputTokens,
-			credits: credits.toFixed(4),
-			// A stream cut short still produced a real, billable partial answer, so
-			// it is stored complete rather than failed — with the reason recorded.
-			status: "complete",
-			error: failure ? failure.slice(0, 500) : null,
-			userId: turn.actorId,
-		})
-
-		await chatRepository.updateConversation(workspaceId, turn.conversation.id, {
-			lastMessageAt: new Date(),
-		})
-
 		yield {
 			type: "done",
 			messageId: turn.assistantMessageId,
-			credits,
-			usage: { input: usage.inputTokens, output: usage.outputTokens },
+			stopped,
+			credits: outcome?.credits ?? 0,
+			usage: {
+				input: outcome?.usage.inputTokens ?? 0,
+				output: outcome?.usage.outputTokens ?? 0,
+			},
 		}
+	},
+
+	/**
+	 * Asks a turn that is generating to stop.
+	 *
+	 * Deliberately not "abort the client's request". The generating request is
+	 * the only thing that can save the partial answer, so it is told to finish
+	 * early rather than killed — it stops pulling from the provider, writes what
+	 * it has, and sends its normal `done` frame. The text on screen survives
+	 * because it is in the database before the client stops reading.
+	 *
+	 * The message id has no row yet — it is created when the turn ends — so this
+	 * cannot be authorised against it. The conversation is what is checked, which
+	 * is the resource boundary that matters: a caller who is not in this
+	 * workspace gets a 404 from `getConversation`.
+	 */
+	async stopTurn(workspaceId: string, conversationId: string, messageId: string) {
+		await this.getConversation(workspaceId, conversationId)
+		await requestStop(workspaceId, conversationId, messageId)
+		return { messageId, stopRequested: true }
 	},
 
 	/** The same turn without streaming, for clients that would rather wait. */

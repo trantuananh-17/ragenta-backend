@@ -104,7 +104,7 @@ export const providerModel = pgTable(
 		uniqueIndex("providerModel_provider_model_uidx").on(table.provider, table.model),
 		check(
 			"providerModel_capability_check",
-			sql`${table.capability} in ('chat', 'embedding')`,
+			sql`${table.capability} in ('chat', 'embedding', 'rerank')`,
 		),
 		check("providerModel_tier_check", sql`${table.tier} in ('economy', 'premium')`),
 	],

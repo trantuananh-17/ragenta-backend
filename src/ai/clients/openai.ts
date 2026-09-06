@@ -45,7 +45,18 @@ function usageOf(raw: CompletionResponse["usage"] | StreamChunk["usage"]): Token
 export function createOpenAiCompatible(
 	id: string,
 	defaultBaseUrl: string,
-	options: { supportsEmbeddings?: boolean } = {},
+	options: {
+		supportsEmbeddings?: boolean
+		/**
+		 * Whether the embeddings route accepts OpenAI's `dimensions` parameter,
+		 * which shortens a vector below the model's native width. A gateway that
+		 * does not document it either ignores it or rejects the request, and
+		 * neither is worth risking for a parameter Ragenta only ever sets to the
+		 * width it already recorded. Sending nothing gets the native width, which
+		 * `embedTexts` then checks against the catalogue.
+		 */
+		supportsEmbeddingDimensions?: boolean
+	} = {},
 ): ProviderClient {
 	const base = (credential: ProviderCredential) =>
 		(credential.baseUrl ?? defaultBaseUrl).replace(/\/+$/, "")
@@ -154,7 +165,9 @@ export function createOpenAiCompatible(
 				body: JSON.stringify({
 					model: request.model,
 					input: request.input,
-					dimensions: request.dimensions,
+					...(options.supportsEmbeddingDimensions === false
+						? {}
+						: { dimensions: request.dimensions }),
 				}),
 			})
 			if (!response.ok) throw await readError(id, response)

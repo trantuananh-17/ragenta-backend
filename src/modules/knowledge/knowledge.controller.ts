@@ -4,8 +4,33 @@ import type { AppContext } from "../../api/types"
 import { requireMembership, requireParam, requireUser } from "../../api/types"
 import { ValidationError } from "../../shared/errors"
 import { paginationQuerySchema } from "../../shared/pagination"
-import { createKnowledgeBaseSchema, updateKnowledgeBaseSchema } from "./knowledge.dto"
+import {
+	createKnowledgeBaseSchema,
+	reindexDocumentSchema,
+	updateKnowledgeBaseSchema,
+	uploadDocumentSchema,
+} from "./knowledge.dto"
 import { knowledgeService } from "./knowledge.service"
+
+/**
+ * Multipart carries strings, so a nested value arrives as JSON in one field.
+ * A malformed one is the caller's mistake and is reported as such rather than
+ * being ignored, which would silently drop the settings they meant to send.
+ */
+function parseJsonField(value: unknown, field: string): unknown {
+	if (typeof value !== "string" || value.trim().length === 0) return undefined
+	try {
+		return JSON.parse(value)
+	} catch {
+		throw new ValidationError(`\`${field}\` must be a JSON object.`)
+	}
+}
+
+/** A body-less POST is legitimate for re-index, so an absent body is `{}`. */
+async function readOptionalJson(c: AppContext): Promise<unknown> {
+	if (!c.req.header("content-type")?.includes("application/json")) return {}
+	return c.req.json().catch(() => ({}))
+}
 
 export const knowledgeController = {
 	async listBases(c: AppContext) {
@@ -95,6 +120,13 @@ export const knowledgeController = {
 					mimeType: file.type || "application/octet-stream",
 					bytes: Buffer.from(await file.arrayBuffer()),
 				},
+				// The per-document overrides ride along as form fields, so an upload
+				// stays one request. `parserConfig` is JSON because multipart has no
+				// nested values.
+				uploadDocumentSchema.parse({
+					parserId: typeof body.parserId === "string" ? body.parserId : undefined,
+					parserConfig: parseJsonField(body.parserConfig, "parserConfig"),
+				}),
 				user.id,
 			),
 			201,
@@ -114,13 +146,41 @@ export const knowledgeController = {
 	async reindexDocument(c: AppContext) {
 		const user = requireUser(c)
 		const membership = requireMembership(c)
+		const input = reindexDocumentSchema.parse(await readOptionalJson(c))
 		return c.json(
 			await knowledgeService.reindexDocument(
+				membership.organizationId,
+				requireParam(c, "documentId"),
+				input,
+				user.id,
+			),
+		)
+	},
+
+	async cancelDocument(c: AppContext) {
+		const user = requireUser(c)
+		const membership = requireMembership(c)
+		return c.json(
+			await knowledgeService.cancelDocument(
 				membership.organizationId,
 				requireParam(c, "documentId"),
 				user.id,
 			),
 		)
+	},
+
+	async listTasks(c: AppContext) {
+		const membership = requireMembership(c)
+		return c.json(
+			await knowledgeService.listTasks(
+				membership.organizationId,
+				requireParam(c, "documentId"),
+			),
+		)
+	},
+
+	listParsers(c: AppContext) {
+		return c.json(knowledgeService.listParsers())
 	},
 
 	async deleteDocument(c: AppContext) {

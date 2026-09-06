@@ -166,6 +166,72 @@ export async function searchChunks(
 	}))
 }
 
+/**
+ * Reads back the vectors for a set of chunks.
+ *
+ * The one caller is the summary tree, which needs a vector per passage and, on
+ * a partial re-index, does not have one in memory for the passages it reused.
+ * Fetching beats re-embedding: the vector already exists and is already paid
+ * for, and re-embedding would bill the customer twice for the same text.
+ *
+ * The workspace filter is in the request as well as the ids, so an id from
+ * another tenant returns nothing rather than that tenant's vector.
+ */
+export async function fetchChunkVectors(
+	dimensions: number,
+	workspaceId: string,
+	chunkIds: string[],
+): Promise<Map<string, number[]>> {
+	if (chunkIds.length === 0) return new Map()
+	const collection = await ensureCollection(dimensions)
+	const found = new Map<string, number[]>()
+
+	// Qdrant accepts a large id list, but a request carrying thousands of them is
+	// one failure for the whole set; batching makes a retry cheap.
+	const BATCH = 256
+	for (let offset = 0; offset < chunkIds.length; offset += BATCH) {
+		const points = await getClient().retrieve(collection, {
+			ids: chunkIds.slice(offset, offset + BATCH),
+			with_vector: true,
+			with_payload: ["workspaceId"],
+		})
+
+		for (const point of points) {
+			if ((point.payload as { workspaceId?: string } | null)?.workspaceId !== workspaceId) {
+				continue
+			}
+			if (Array.isArray(point.vector)) {
+				found.set(String(point.id), point.vector as number[])
+			}
+		}
+	}
+
+	return found
+}
+
+/** Removes named chunks. Used when a re-index replaces some page ranges but not all. */
+export async function deleteChunkVectors(
+	dimensions: number,
+	workspaceId: string,
+	chunkIds: string[],
+): Promise<void> {
+	if (chunkIds.length === 0) return
+	const collection = await ensureCollection(dimensions)
+
+	const BATCH = 512
+	for (let offset = 0; offset < chunkIds.length; offset += BATCH) {
+		await getClient().delete(collection, {
+			wait: true,
+			filter: {
+				must: [
+					{ key: "workspaceId", match: { value: workspaceId } },
+					{ has_id: chunkIds.slice(offset, offset + BATCH) },
+				],
+			},
+		})
+	}
+}
+
 export async function deleteDocumentVectors(
 	dimensions: number,
 	workspaceId: string,

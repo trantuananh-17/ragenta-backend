@@ -22,12 +22,15 @@ import type { ExtractedSection } from "./extractor"
  * is not guaranteed to be in English, and splitting CJK text on `.` alone
  * produces one enormous chunk.
  */
-const DELIMITERS = ["\n", "。", "；", "！", "？", ". ", "! ", "? ", "; "]
+export const DEFAULT_DELIMITERS = ["\n", "。", "；", "！", "？", ". ", "! ", "? ", "; "]
 
 export interface Chunk {
 	content: string
 	tokenCount: number
 	position: string
+	/** 1-based, from the sections that fed this chunk. Null for pageless formats. */
+	fromPage: number | null
+	toPage: number | null
 }
 
 export interface ChunkOptions {
@@ -35,6 +38,15 @@ export interface ChunkOptions {
 	tokenSize: number
 	/** How much of the previous chunk to repeat, 0–99. */
 	overlapPercent: number
+	/** Overrides the built-in set. RAGFlow exposes this as `parser_config.delimiter`. */
+	delimiters?: string[]
+	/**
+	 * Prepended to every chunk before it is measured and embedded — a heading
+	 * path, a table header, a section title. It is what makes a chunk from the
+	 * middle of a document still say what it is about, and it is why the
+	 * hierarchical parsers can hand this function a flat section list.
+	 */
+	prefix?: string
 }
 
 /**
@@ -42,10 +54,10 @@ export interface ChunkOptions {
  * a sentence stays punctuated. Pieces are still merged afterwards, so a short
  * one is not a short chunk.
  */
-function splitAtDelimiters(text: string): string[] {
+function splitAtDelimiters(text: string, delimiters: string[]): string[] {
 	let pieces = [text]
 
-	for (const delimiter of DELIMITERS) {
+	for (const delimiter of delimiters) {
 		pieces = pieces.flatMap((piece) => {
 			const parts = piece.split(delimiter)
 			return parts
@@ -67,23 +79,45 @@ export function chunkSections(
 	// the overlap, so the prefix the next chunk inherits does not push it over.
 	const closeAt = (tokenSize * (100 - overlapPercent)) / 100
 
+	const delimiters =
+		options.delimiters && options.delimiters.length > 0
+			? options.delimiters
+			: DEFAULT_DELIMITERS
+	const prefix = options.prefix ? `${options.prefix.trim()}\n\n` : ""
+
 	const chunks: Chunk[] = []
 	let buffer = ""
 	let bufferTokens = 0
 	let bufferPosition = ""
+	let fromPage: number | null = null
+	let toPage: number | null = null
+	let lastBody = ""
 
 	const flush = () => {
-		const content = buffer.trim()
-		if (content.length > 0) {
-			chunks.push({ content, tokenCount: estimateTokens(content), position: bufferPosition })
+		const body = buffer.trim()
+		if (body.length > 0) {
+			lastBody = body
+			const content = prefix + body
+			chunks.push({
+				content,
+				tokenCount: estimateTokens(content),
+				position: bufferPosition,
+				fromPage,
+				toPage,
+			})
 		}
 		buffer = ""
 		bufferTokens = 0
+		fromPage = null
+		toPage = null
 	}
 
 	const overlapTail = () => {
-		if (overlapPercent === 0 || chunks.length === 0) return ""
-		const previous = chunks[chunks.length - 1]?.content ?? ""
+		// The *body* of the previous chunk, never its prefix: the prefix is added
+		// again on flush, and carrying it into the overlap would repeat a heading
+		// twice inside one chunk.
+		if (overlapPercent === 0) return ""
+		const previous = lastBody
 		// Taken by characters rather than tokens: the boundary only has to be
 		// approximately right, and slicing a string is free where re-tokenising
 		// every closed chunk would not be.
@@ -91,7 +125,7 @@ export function chunkSections(
 	}
 
 	for (const section of sections) {
-		for (const piece of splitAtDelimiters(section.text)) {
+		for (const piece of splitAtDelimiters(section.text, delimiters)) {
 			const pieceTokens = estimateTokens(piece)
 
 			if (bufferTokens > 0 && bufferTokens >= closeAt) {
@@ -102,6 +136,10 @@ export function chunkSections(
 			}
 
 			if (bufferTokens === 0) bufferPosition = section.position
+			if (section.page !== undefined) {
+				fromPage ??= section.page
+				toPage = section.page
+			}
 			buffer += piece
 			bufferTokens += pieceTokens
 

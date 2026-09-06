@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer"
 
 import { resolveEmbeddingModel } from "../../ai/embed"
+import { resolveRerankModel } from "../../ai/rerank"
 import { ConflictError, NotFoundError, ValidationError } from "../../shared/errors"
 import { newId } from "../../shared/id"
 import { logger } from "../../shared/logger"
@@ -22,7 +23,18 @@ import { modelService } from "../model/model.service"
 import { ingestionService } from "./ingestion.service"
 import { knowledgeRepository } from "./knowledge.repository"
 import { resolveFormat } from "./extractor"
-import type { CreateKnowledgeBaseInput, UpdateKnowledgeBaseInput } from "./knowledge.dto"
+import { PARSER_LIST, assertParserAccepts } from "./parsers"
+import {
+	DEFAULT_SIMILARITY_THRESHOLD,
+	DEFAULT_TOP_K,
+	DEFAULT_VECTOR_WEIGHT,
+} from "../retrieval/retrieval.service"
+import type {
+	CreateKnowledgeBaseInput,
+	ReindexDocumentInput,
+	UpdateKnowledgeBaseInput,
+	UploadDocumentInput,
+} from "./knowledge.dto"
 
 const log = logger.child({ module: "knowledge" })
 
@@ -91,6 +103,12 @@ export const knowledgeService = {
 			throw new ConflictError(`A knowledge base with the slug "${slug}" already exists.`)
 		}
 
+		// Refused before the row exists: a base whose reranker cannot be called
+		// would fail on every query, with nothing on screen to say why.
+		if (input.rerank) {
+			await resolveRerankModel(input.rerank.provider, input.rerank.model)
+		}
+
 		const base = await knowledgeRepository.insertBase({
 			id: newId(),
 			organizationId: workspaceId,
@@ -102,6 +120,13 @@ export const knowledgeService = {
 			embeddingDimensions: target.dimensions,
 			chunkTokenSize: input.chunkTokenSize,
 			chunkOverlapPercent: input.chunkOverlapPercent,
+			parserId: input.parserId,
+			parserConfig: input.parserConfig,
+			topK: input.topK ?? DEFAULT_TOP_K,
+			similarityThreshold: (input.similarityThreshold ?? DEFAULT_SIMILARITY_THRESHOLD).toFixed(3),
+			vectorWeight: (input.vectorWeight ?? DEFAULT_VECTOR_WEIGHT).toFixed(3),
+			rerankProvider: input.rerank?.provider ?? null,
+			rerankModel: input.rerank?.model ?? null,
 			createdBy: actorId,
 		})
 
@@ -123,7 +148,35 @@ export const knowledgeService = {
 		input: UpdateKnowledgeBaseInput,
 		actorId: string,
 	) {
-		const updated = await knowledgeRepository.updateBase(workspaceId, baseId, input)
+		if (input.rerank) {
+			await resolveRerankModel(input.rerank.provider, input.rerank.model)
+		}
+
+		const updated = await knowledgeRepository.updateBase(workspaceId, baseId, {
+			...(input.name !== undefined ? { name: input.name } : {}),
+			...(input.description !== undefined ? { description: input.description } : {}),
+			...(input.chunkTokenSize !== undefined
+				? { chunkTokenSize: input.chunkTokenSize }
+				: {}),
+			...(input.chunkOverlapPercent !== undefined
+				? { chunkOverlapPercent: input.chunkOverlapPercent }
+				: {}),
+			...(input.parserId !== undefined ? { parserId: input.parserId } : {}),
+			...(input.parserConfig !== undefined ? { parserConfig: input.parserConfig } : {}),
+			...(input.topK !== undefined ? { topK: input.topK } : {}),
+			...(input.similarityThreshold !== undefined
+				? { similarityThreshold: input.similarityThreshold.toFixed(3) }
+				: {}),
+			...(input.vectorWeight !== undefined
+				? { vectorWeight: input.vectorWeight.toFixed(3) }
+				: {}),
+			...(input.rerank !== undefined
+				? {
+						rerankProvider: input.rerank?.provider ?? null,
+						rerankModel: input.rerank?.model ?? null,
+					}
+				: {}),
+		})
 		if (!updated) throw new NotFoundError("Knowledge base")
 
 		await auditService.record({
@@ -205,10 +258,11 @@ export const knowledgeService = {
 		workspaceId: string,
 		baseId: string,
 		file: { name: string; mimeType: string; bytes: Buffer },
+		options: UploadDocumentInput,
 		actorId: string,
 	) {
 		assertInfrastructure()
-		await this.getBase(workspaceId, baseId)
+		const base = await this.getBase(workspaceId, baseId)
 
 		if (file.bytes.length === 0) throw new ValidationError("The file is empty.")
 		if (file.bytes.length > MAX_UPLOAD_BYTES) {
@@ -218,8 +272,11 @@ export const knowledgeService = {
 		}
 
 		// Refused before anything is stored: an unreadable format would otherwise
-		// occupy the bucket and fail in the worker, where nobody is watching.
-		resolveFormat(file.mimeType, file.name)
+		// occupy the bucket and fail in the worker, where nobody is watching. The
+		// second check is the strategy's own — the Table method cannot read a PDF,
+		// and finding that out at upload is the only time the user can fix it.
+		const format = resolveFormat(file.mimeType, file.name)
+		assertParserAccepts(options.parserId ?? base.parserId, format, file.name)
 
 		const id = newId()
 		const key = documentKey(workspaceId, id)
@@ -234,6 +291,8 @@ export const knowledgeService = {
 			mimeType: file.mimeType,
 			sizeBytes: file.bytes.length,
 			status: "pending",
+			parserId: options.parserId ?? null,
+			parserConfig: options.parserConfig ?? null,
 			createdBy: actorId,
 		})
 
@@ -258,15 +317,39 @@ export const knowledgeService = {
 	 * makes it a new job, and therefore a new credit charge, because it is a new
 	 * set of embeddings.
 	 */
-	async reindexDocument(workspaceId: string, documentId: string, actorId: string) {
+	async reindexDocument(
+		workspaceId: string,
+		documentId: string,
+		input: ReindexDocumentInput,
+		actorId: string,
+	) {
 		const row = await this.getDocument(workspaceId, documentId)
+		const base = await this.getBase(workspaceId, row.knowledgeBaseId)
 		assertInfrastructure()
+
+		const parserId =
+			input.parserId === undefined ? (row.parserId ?? base.parserId) : (input.parserId ?? base.parserId)
+		assertParserAccepts(parserId, resolveFormat(row.mimeType, row.name), row.name)
+
+		const attempt = row.attempt + 1
 
 		await knowledgeRepository.updateDocument(documentId, {
 			status: "pending",
 			error: null,
+			progress: "0",
+			progressMessage: "Queued for re-indexing",
+			// Any earlier cancel is spent: this is a new run, and starting it with
+			// the flag still set would cancel it before it did anything.
+			cancelRequested: false,
+			attempt,
+			...(input.parserId !== undefined ? { parserId: input.parserId } : {}),
+			...(input.parserConfig !== undefined ? { parserConfig: input.parserConfig } : {}),
 		})
-		await enqueueDocumentIngestion({ documentId, workspaceId }, Date.now())
+
+		// The attempt number is the job id, so a re-index is always a new job while
+		// a duplicate click on the same attempt is not. The pipeline's digest
+		// comparison is what then decides how much of the work actually repeats.
+		await enqueueDocumentIngestion({ documentId, workspaceId }, attempt)
 
 		await auditService.record({
 			action: "knowledge.document.reindexed",
@@ -274,10 +357,61 @@ export const knowledgeService = {
 			organizationId: workspaceId,
 			targetType: "document",
 			targetId: documentId,
-			metadata: { name: row.name },
+			metadata: { name: row.name, attempt, parserId },
 		})
 
-		return { ...row, status: "pending" }
+		return { ...row, status: "pending", attempt }
+	},
+
+	/**
+	 * Asks the worker to stop between stages.
+	 *
+	 * A flag rather than a job removal: the job may be mid-way through a provider
+	 * call that has already been paid for, and BullMQ cannot interrupt one. The
+	 * passages already written stay — they are real, and discarding them would
+	 * make cancelling strictly worse than waiting.
+	 */
+	async cancelDocument(workspaceId: string, documentId: string, actorId: string) {
+		const row = await this.getDocument(workspaceId, documentId)
+		if (row.status === "ready" || row.status === "failed" || row.status === "cancelled") {
+			throw new ValidationError(`This document is not being indexed — it is ${row.status}.`)
+		}
+
+		await knowledgeRepository.updateDocument(documentId, {
+			cancelRequested: true,
+			progressMessage: "Stopping after the current step",
+		})
+
+		await auditService.record({
+			action: "knowledge.document.cancelled",
+			actorId,
+			organizationId: workspaceId,
+			targetType: "document",
+			targetId: documentId,
+			metadata: { name: row.name, status: row.status },
+		})
+
+		return { id: documentId, cancelRequested: true }
+	},
+
+	/** The ingestion plan and what each part of it did. Drives the progress detail. */
+	async listTasks(workspaceId: string, documentId: string) {
+		await this.getDocument(workspaceId, documentId)
+		return { items: await knowledgeRepository.listTasks(documentId) }
+	},
+
+	/** The chunking strategies this deployment offers, and what each one reads. */
+	listParsers() {
+		return {
+			items: PARSER_LIST.map((parser) => ({
+				id: parser.id,
+				name: parser.name,
+				description: parser.description,
+				formats: parser.formats,
+				available: parser.parse !== undefined,
+				unavailable: parser.unavailable ?? null,
+			})),
+		}
 	},
 
 	async deleteDocument(workspaceId: string, documentId: string, actorId: string) {

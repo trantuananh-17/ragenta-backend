@@ -28,6 +28,17 @@ export const providerController = {
 		)
 	},
 
+	/**
+	 * Pull the provider's own catalogue, with its own prices, into the database.
+	 * Only offered where the provider publishes prices machine-readably.
+	 */
+	async importModels(c: AppContext) {
+		const user = requireUser(c)
+		return c.json(
+			await providerService.importModels(requireParam(c, "provider"), user.id),
+		)
+	},
+
 	async checkCredential(c: AppContext) {
 		const actor = requireUser(c)
 		return c.json(

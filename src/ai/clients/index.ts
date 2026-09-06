@@ -1,6 +1,8 @@
 import { anthropicClient } from "./anthropic"
 import { googleClient } from "./google"
 import { createOpenAiCompatible, openaiClient } from "./openai"
+import { openrouterClient } from "./openrouter"
+import { cohereClient, jinaClient, voyageClient } from "./rerankers"
 import type { ProviderClient } from "./types"
 
 /**
@@ -51,6 +53,14 @@ export const PROVIDER_DESCRIPTORS: ProviderDescriptor[] = [
 		keyHint: "AIza...",
 	},
 	{
+		id: "openrouter",
+		name: "OpenRouter",
+		description:
+			"A gateway to hundreds of models from every vendor, behind one key and one bill. Chat and embeddings both work, so one key covers the whole RAG path. Model ids are namespaced — `openai/gpt-4o`, not `gpt-4o`. Use Import models to pull its catalogue with the prices OpenRouter itself publishes, rather than shipping a snapshot that would be stale on arrival.",
+		client: openrouterClient,
+		keyHint: "sk-or-v1-...",
+	},
+	{
 		id: "deepseek",
 		name: "DeepSeek",
 		description: "OpenAI-compatible endpoint at api.deepseek.com.",
@@ -98,14 +108,24 @@ export const PROVIDER_DESCRIPTORS: ProviderDescriptor[] = [
 	{
 		id: "cohere",
 		name: "Cohere",
-		description: "Not implemented. Its chat and embed APIs share no shape with the three above.",
+		description:
+			"Reranking only. Its chat and embed APIs share no shape with the three above, and Ragenta does not need them.",
+		client: cohereClient,
 		keyHint: "...",
 	},
 	{
 		id: "voyage",
 		name: "Voyage AI",
-		description: "Not implemented. Embeddings and reranking only.",
+		description: "Reranking only. Its embedding API is not wired in.",
+		client: voyageClient,
 		keyHint: "pa-...",
+	},
+	{
+		id: "jina",
+		name: "Jina AI",
+		description: "Reranking only. Multilingual, which matters for a Vietnamese knowledge base.",
+		client: jinaClient,
+		keyHint: "jina_...",
 	},
 ]
 
@@ -122,6 +142,19 @@ export function isKnownProvider(id: string): boolean {
 /** The adapter for a provider, or undefined when this deployment cannot call it. */
 export function providerClient(id: string): ProviderClient | undefined {
 	return BY_ID.get(id)?.client
+}
+
+/**
+ * Every capability on `ProviderClient` is optional, so a caller that is about to
+ * generate needs the method's presence in the *type*, not just a runtime check —
+ * otherwise it carries a `client` it has already proven can chat and has to
+ * re-prove it at every use.
+ */
+export type ChatCapableClient = ProviderClient & Required<Pick<ProviderClient, "streamChat">>
+
+export function chatCapableClient(id: string): ChatCapableClient | undefined {
+	const client = BY_ID.get(id)?.client
+	return client?.streamChat ? (client as ChatCapableClient) : undefined
 }
 
 export * from "./types"

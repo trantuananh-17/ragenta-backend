@@ -5,7 +5,7 @@ import {
 	requireCredential,
 } from "../../ai/catalogue"
 import { PROVIDER_DESCRIPTORS, findProvider } from "../../ai/clients"
-import { DEFAULT_CHAT, DEFAULT_EMBEDDING } from "../../ai/models"
+import { DEFAULT_CHAT, DEFAULT_EMBEDDING, tierFor } from "../../ai/models"
 import {
 	EncryptionUnavailableError,
 	encryptSecret,
@@ -61,6 +61,8 @@ export const providerService = {
 					name: descriptor.name,
 					description: descriptor.description,
 					supported: descriptor.client !== undefined,
+					/** True when the provider publishes a priced catalogue we can pull. */
+					importable: descriptor.client?.listModels !== undefined,
 					keyHint: descriptor.keyHint,
 					requiresBaseUrl: descriptor.requiresBaseUrl ?? false,
 					defaultBaseUrl: descriptor.client?.defaultBaseUrl ?? null,
@@ -153,6 +155,69 @@ export const providerService = {
 	 * instead of the result an operator asked for. The outcome is written to the
 	 * credential row so the state survives a page reload.
 	 */
+	/**
+	 * Pulls a provider's own catalogue, with its own prices, into `provider_model`.
+	 *
+	 * Every rate in `src/ai/models.ts` is a number somebody copied by hand, and
+	 * `STATUS.md` carries that as known debt. A provider that publishes prices
+	 * machine-readably can simply be asked, and for a gateway proxying hundreds
+	 * of models that change weekly there is no other honest option — a snapshot
+	 * compiled into the build would be wrong within a week and would bill
+	 * customers from those wrong numbers.
+	 *
+	 * Rows are upserted, so re-running this is how prices are kept current. It
+	 * never deletes: a model that has disappeared upstream may still be named by
+	 * a workspace's settings, and removing it silently would break that
+	 * workspace's next turn with no explanation.
+	 */
+	async importModels(provider: string, actorId: string) {
+		const descriptor = findProvider(provider)
+		if (!descriptor) throw new NotFoundError("Provider")
+		if (!descriptor.client?.listModels) {
+			throw new ConflictError(
+				`${descriptor.name} does not publish a priced model list, so its models have to be added by hand.`,
+			)
+		}
+
+		const credential = await requireCredential(provider)
+		const listed = await descriptor.client.listModels(credential)
+
+		let imported = 0
+		for (const model of listed) {
+			await providerRepository.upsertModel({
+				id: newId(),
+				provider,
+				model: model.id,
+				capability: model.capability,
+				tier: tierFor(model.inputPerMillion, model.outputPerMillion),
+				contextWindow: model.contextWindow ?? null,
+				inputPerMillion: model.inputPerMillion.toFixed(6),
+				outputPerMillion: model.outputPerMillion.toFixed(6),
+				embeddingPerMillion: model.embeddingPerMillion.toFixed(6),
+				embeddingDimensions: model.embeddingDimensions ?? null,
+				enabled: true,
+				createdBy: actorId,
+			})
+			imported += 1
+		}
+
+		invalidateCatalogue()
+
+		await auditService.record({
+			action: "provider.models.imported",
+			actorId,
+			targetType: "provider",
+			targetId: provider,
+			metadata: { provider, imported },
+		})
+
+		return {
+			provider,
+			imported,
+			detail: `${imported} model${imported === 1 ? "" : "s"} imported from ${descriptor.name}, priced from its own catalogue.`,
+		}
+	},
+
 	async checkCredential(provider: string, actorId: string) {
 		const descriptor = findProvider(provider)
 		if (!descriptor) throw new NotFoundError("Provider")

@@ -50,6 +50,13 @@
       "when": 1788619654571,
       "tag": "0006_wet_leopardon",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788668894072,
+      "tag": "0007_volatile_nick_fury",
+      "breakpoints": true
     }
   ]
 }

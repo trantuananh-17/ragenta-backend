@@ -123,6 +123,25 @@ export const chatController = {
 		})
 	},
 
+	/**
+	 * Stop a turn that is generating.
+	 *
+	 * The message id comes from the `start` frame of the stream the caller
+	 * opened. It has no row yet — it is written when the turn ends — so the
+	 * conversation is what authorises this, which `workspaceScope` plus the
+	 * service's own `getConversation` already enforce.
+	 */
+	async stopMessage(c: AppContext) {
+		const membership = requireMembership(c)
+		return c.json(
+			await chatService.stopTurn(
+				membership.organizationId,
+				requireParam(c, "conversationId"),
+				requireParam(c, "messageId"),
+			),
+		)
+	},
+
 	async sendMessage(c: AppContext) {
 		const user = requireUser(c)
 		const membership = requireMembership(c)

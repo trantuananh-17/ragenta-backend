@@ -59,3 +59,9 @@ chatRoutes.post(
 	contributor,
 	chatController.streamMessage,
 )
+chatRoutes.post(
+	"/:workspaceId/conversations/:conversationId/messages/:messageId/stop",
+	workspaceScope,
+	contributor,
+	chatController.stopMessage,
+)

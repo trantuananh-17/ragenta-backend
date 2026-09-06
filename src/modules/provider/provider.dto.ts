@@ -20,7 +20,7 @@ const rateSchema = z.number().nonnegative().max(10_000)
 export const upsertModelSchema = z.object({
 	provider: z.string().trim().min(1).max(64),
 	model: z.string().trim().min(1).max(160),
-	capability: z.enum(["chat", "embedding"]),
+	capability: z.enum(["chat", "embedding", "rerank"]),
 	tier: z.enum(["economy", "premium"]),
 	contextWindow: z.number().int().positive().max(10_000_000).nullable().default(null),
 	inputPerMillion: rateSchema.default(0),
