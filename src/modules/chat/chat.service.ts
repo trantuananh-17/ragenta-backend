@@ -140,39 +140,6 @@ export const chatService = {
 		}
 	},
 
-	/**
-	 * Proves every knowledge base belongs to this workspace, and that they can be
-	 * searched together.
-	 *
-	 * The ids came from the client and nothing else here would check them. The
-	 * embedding comparison is the second half: two bases embedded with different
-	 * models produce vectors that are not comparable, so searching them together
-	 * would not degrade the ranking, it would invent one. Refusing at the point
-	 * the set is chosen is the only place a user can act on it.
-	 */
-	async assertBasesSearchableTogether(workspaceId: string, baseIds: string[]) {
-		const unique = [...new Set(baseIds)]
-		if (unique.length === 0) return
-
-		const bases = await Promise.all(
-			unique.map((baseId) => knowledgeService.getBase(workspaceId, baseId)),
-		)
-
-		const primary = bases[0]
-		if (!primary) return
-
-		const mismatched = bases.find(
-			(base) =>
-				base.embeddingProvider !== primary.embeddingProvider ||
-				base.embeddingModel !== primary.embeddingModel,
-		)
-		if (mismatched) {
-			throw new ValidationError(
-				`"${mismatched.name}" and "${primary.name}" use different embedding models, so one conversation cannot search both. Use separate conversations, or rebuild one of them on the other's model.`,
-			)
-		}
-	},
-
 	async createConversation(
 		workspaceId: string,
 		input: CreateConversationInput,
@@ -182,7 +149,7 @@ export const chatService = {
 			...(input.knowledgeBaseId ? [input.knowledgeBaseId] : []),
 			...input.additionalKnowledgeBaseIds,
 		]
-		await this.assertBasesSearchableTogether(workspaceId, baseIds)
+		await knowledgeService.assertBasesSearchableTogether(workspaceId, baseIds)
 		if (input.rerank) {
 			await resolveRerankModel(input.rerank.provider, input.rerank.model)
 		}
@@ -226,7 +193,7 @@ export const chatService = {
 		const primaryId =
 			input.knowledgeBaseId === undefined ? existing.knowledgeBaseId : input.knowledgeBaseId
 		const additional = input.additionalKnowledgeBaseIds ?? existing.additionalKnowledgeBaseIds
-		await this.assertBasesSearchableTogether(workspaceId, [
+		await knowledgeService.assertBasesSearchableTogether(workspaceId, [
 			...(primaryId ? [primaryId] : []),
 			...additional,
 		])

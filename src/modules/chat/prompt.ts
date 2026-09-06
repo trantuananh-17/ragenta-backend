@@ -80,6 +80,15 @@ export interface PromptOptions {
 	/** Reserved for the answer. */
 	maxOutputTokens: number
 	grounding: Grounding
+	/**
+	 * An agent's own brief, appended to the system message.
+	 *
+	 * It comes after the rules above it, and is labelled, so a brief that says
+	 * "answer from what you know" cannot quietly cancel the citation and
+	 * grounding rules a grounded agent was configured with — the operator sets
+	 * the task, the platform sets the boundaries. A chat turn passes nothing.
+	 */
+	instructions?: string | null
 }
 
 export interface AssembledPrompt {
@@ -132,7 +141,7 @@ export function assemblePrompt(
 	const available = options.contextWindow - options.maxOutputTokens - estimateTokens(question)
 
 	const used: RetrievedChunk[] = []
-	let spent = estimateTokens(SYSTEM_PROMPT)
+	let spent = estimateTokens(SYSTEM_PROMPT) + estimateTokens(options.instructions ?? "")
 
 	for (const entry of chunks) {
 		const cost = estimateTokens(entry.content) + 32
@@ -152,8 +161,14 @@ export function assemblePrompt(
 		spent += cost
 	}
 
+	const base = systemPrompt(options.grounding, used.length > 0)
+	const brief = options.instructions?.trim()
+
 	const messages: ChatMessage[] = [
-		{ role: "system", content: systemPrompt(options.grounding, used.length > 0) },
+		{
+			role: "system",
+			content: brief ? `${base}\n\nYour brief for this task:\n\n${brief}` : base,
+		},
 		...trimmedHistory,
 	]
 

@@ -82,6 +82,40 @@ export const knowledgeService = {
 	},
 
 	/**
+	 * Proves every knowledge base belongs to this workspace, and that they can be
+	 * searched together.
+	 *
+	 * The ids came from a client and nothing else would check them. The embedding
+	 * comparison is the second half: two bases embedded with different models
+	 * produce vectors that are not comparable, so searching them together would
+	 * not degrade the ranking, it would invent one. Refusing at the point the set
+	 * is chosen is the only place a user can act on it.
+	 *
+	 * It lives here rather than in the caller because both a conversation and an
+	 * agent choose a set of bases, and the rule is the same for either.
+	 */
+	async assertBasesSearchableTogether(workspaceId: string, baseIds: string[]) {
+		const unique = [...new Set(baseIds)]
+		if (unique.length === 0) return
+
+		const bases = await Promise.all(unique.map((baseId) => this.getBase(workspaceId, baseId)))
+
+		const primary = bases[0]
+		if (!primary) return
+
+		const mismatched = bases.find(
+			(base) =>
+				base.embeddingProvider !== primary.embeddingProvider ||
+				base.embeddingModel !== primary.embeddingModel,
+		)
+		if (mismatched) {
+			throw new ValidationError(
+				`"${mismatched.name}" and "${primary.name}" use different embedding models, so they cannot be searched together. Search them separately, or rebuild one of them on the other's model.`,
+			)
+		}
+	},
+
+	/**
 	 * The embedding model is resolved once, here, and written onto the row. From
 	 * then on the knowledge base is pinned to it — changing the workspace default
 	 * later moves new knowledge bases, never this one's existing vectors.

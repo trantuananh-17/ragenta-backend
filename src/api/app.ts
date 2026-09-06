@@ -9,6 +9,7 @@ import { checkVectorStore, isVectorStoreConfigured } from "../vector/qdrant"
 import { accountRoutes } from "../modules/account/account.routes"
 import { adminRoutes } from "../modules/admin/admin.routes"
 import { billingRoutes } from "../modules/billing/billing.routes"
+import { agentRoutes } from "../modules/agent/agent.routes"
 import { chatRoutes } from "../modules/chat/chat.routes"
 import { knowledgeRoutes } from "../modules/knowledge/knowledge.routes"
 import { planRoutes } from "../modules/billing/plan.routes"
@@ -105,6 +106,7 @@ export function createApp() {
 	app.route("/v1/workspaces", promoRoutes)
 	app.route("/v1/workspaces", knowledgeRoutes)
 	app.route("/v1/workspaces", chatRoutes)
+	app.route("/v1/workspaces", agentRoutes)
 	app.route("/v1/admin", adminRoutes)
 
 	// Registered last so the document sees every route above it. Off in

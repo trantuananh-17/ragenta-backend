@@ -4,6 +4,12 @@ import { z } from "zod"
 import { auth } from "../auth/auth"
 import { env } from "../config/env"
 import { adjustCreditsSchema, adminListQuerySchema, setPlanSchema } from "../modules/admin/admin.dto"
+import {
+	agentConfigSchema,
+	createAgentSchema,
+	runAgentSchema,
+	updateAgentSchema,
+} from "../modules/agent/agent.dto"
 import { createCheckoutSchema, updateAutoReloadSchema } from "../modules/billing/billing.dto"
 import {
 	createConversationSchema,
@@ -457,6 +463,80 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary:
 			"Stop a turn that is generating. The partial answer is saved and the stream ends with its normal `done` frame, so the text already on screen survives",
 		tags: ["Chat"],
+		access: "owner, admin, member",
+	},
+
+	"GET /v1/workspaces/:workspaceId/agents": {
+		summary: "List agents, most recently changed first",
+		tags: ["Agents"],
+		access: "any member",
+		query: paginationQuerySchema,
+	},
+	"POST /v1/workspaces/:workspaceId/agents": {
+		summary: "Create an agent. Version 1 is written with it and the agent starts as a draft",
+		tags: ["Agents"],
+		access: "owner, admin, member",
+		body: createAgentSchema,
+		status: 201,
+	},
+	"GET /v1/workspaces/:workspaceId/agents/:agentId": {
+		summary: "Agent detail, with the configuration of its current version",
+		tags: ["Agents"],
+		access: "any member",
+	},
+	"PATCH /v1/workspaces/:workspaceId/agents/:agentId": {
+		summary:
+			"Rename an agent, move it between projects, or change its status. The configuration is republished, never patched",
+		tags: ["Agents"],
+		access: "owner, admin, member",
+		body: updateAgentSchema,
+	},
+	"DELETE /v1/workspaces/:workspaceId/agents/:agentId": {
+		summary: "Delete an agent, its versions and its run history",
+		tags: ["Agents"],
+		access: "owner, admin, member",
+		status: 204,
+	},
+	"GET /v1/workspaces/:workspaceId/agents/:agentId/versions": {
+		summary: "Every version of this agent, newest first",
+		tags: ["Agents"],
+		access: "any member",
+	},
+	"POST /v1/workspaces/:workspaceId/agents/:agentId/versions": {
+		summary:
+			"Publish a new immutable version and make it current. Runs already in flight keep the version they started on",
+		tags: ["Agents"],
+		access: "owner, admin, member",
+		body: agentConfigSchema,
+		status: 201,
+	},
+	"GET /v1/workspaces/:workspaceId/agents/:agentId/runs": {
+		summary: "Run history for one agent, newest first",
+		tags: ["Agents"],
+		access: "any member",
+		query: paginationQuerySchema,
+	},
+	"POST /v1/workspaces/:workspaceId/agents/:agentId/runs": {
+		summary:
+			"Run the agent over SSE. Events: phase, citations, warning, delta, done, error. Refusals arrive as a status code before the stream opens",
+		tags: ["Agents"],
+		access: "owner, admin, member",
+		body: runAgentSchema,
+	},
+	"GET /v1/workspaces/:workspaceId/agent-runs/:runId": {
+		summary: "One run, with its status, output and total credits",
+		tags: ["Agents"],
+		access: "any member",
+	},
+	"GET /v1/workspaces/:workspaceId/agent-runs/:runId/steps": {
+		summary: "The steps of a run, in order, each with what it cost",
+		tags: ["Agents"],
+		access: "any member",
+	},
+	"POST /v1/workspaces/:workspaceId/agent-runs/:runId/stop": {
+		summary:
+			"Stop a run that is generating. The partial answer is saved and the stream ends with its normal `done` frame",
+		tags: ["Agents"],
 		access: "owner, admin, member",
 	},
 

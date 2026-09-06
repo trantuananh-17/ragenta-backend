@@ -71,6 +71,13 @@
       "when": 1788700549415,
       "tag": "0009_signup_grant_per_user",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788708905712,
+      "tag": "0010_slim_toxin",
+      "breakpoints": true
     }
   ]
 }
