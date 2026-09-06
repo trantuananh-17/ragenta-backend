@@ -1,4 +1,4 @@
-import { and, count, desc, eq } from "drizzle-orm"
+import { and, asc, count, desc, eq } from "drizzle-orm"
 
 import { db } from "../../db/client"
 import type { DbExecutor } from "../../db/client"
@@ -99,6 +99,39 @@ export const workspaceRepository = {
 			.from(member)
 			.where(eq(member.organizationId, workspaceId))
 		return row?.value ?? 0
+	},
+
+	/**
+	 * The workspace an account is entitled to a free monthly allowance on: the
+	 * first one it created.
+	 *
+	 * Derived from the oldest owner membership rather than stored as a flag. A
+	 * flag is one more thing to keep true, and the ordering already answers the
+	 * question — "the workspace you made first" is exactly what the free tier is
+	 * being described as.
+	 */
+	async findPrimaryWorkspaceId(userId: string, executor: DbExecutor = db) {
+		const rows = await executor
+			.select({ organizationId: member.organizationId })
+			.from(member)
+			.where(and(eq(member.userId, userId), eq(member.role, "owner")))
+			.orderBy(asc(member.createdAt), asc(member.id))
+			.limit(1)
+		return rows[0]?.organizationId
+	},
+
+	/**
+	 * Who owns this workspace. The oldest owner wins when there is more than one,
+	 * so a co-owner added later never changes whose allowance is being counted.
+	 */
+	async findOwnerId(workspaceId: string, executor: DbExecutor = db) {
+		const rows = await executor
+			.select({ userId: member.userId })
+			.from(member)
+			.where(and(eq(member.organizationId, workspaceId), eq(member.role, "owner")))
+			.orderBy(asc(member.createdAt), asc(member.id))
+			.limit(1)
+		return rows[0]?.userId
 	},
 
 	async countMembersWithRole(workspaceId: string, role: string, executor: DbExecutor = db) {

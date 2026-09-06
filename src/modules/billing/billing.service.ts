@@ -10,6 +10,7 @@ import { workspaceRepository } from "../workspace/workspace.repository"
 import { billingRepository } from "./billing.repository"
 import {
 	ACTIVE_SUBSCRIPTION_STATUSES,
+	FREE_MONTHLY_CREDITS,
 	PLAN_FREE,
 	SIGNUP_GRANT_CREDITS,
 	creditsForPeriod,
@@ -315,6 +316,43 @@ export const billingService = {
 	},
 
 	/**
+	 * What this workspace is owed this period, and the ledger key that makes the
+	 * grant happen once.
+	 *
+	 * A paid plan is billed per workspace, so its allowance is the workspace's
+	 * and its key names the workspace. Free is not: the allowance belongs to the
+	 * account and lands on the one workspace that account created first, so its
+	 * key names the *owner*. That is what stops the obvious abuse — a second free
+	 * workspace is worth nothing, and deleting the first to make a new "first"
+	 * cannot claim the month twice.
+	 */
+	async scheduledRefill(
+		workspaceId: string,
+		plan: PlanName,
+		at: Date,
+	): Promise<{ amount: number; reference: string } | null> {
+		if (plan === PLAN_FREE) {
+			const ownerId = await workspaceRepository.findOwnerId(workspaceId)
+			if (!ownerId) return null
+
+			const primaryId = await workspaceRepository.findPrimaryWorkspaceId(ownerId)
+			if (primaryId !== workspaceId) return null
+
+			return {
+				amount: FREE_MONTHLY_CREDITS,
+				reference: `refill:free:${ownerId}:${monthKey(at)}`,
+			}
+		}
+
+		const seats = await workspaceRepository.countMembers(workspaceId)
+		const amount = creditsForPeriod(plan, seats)
+		// Enterprise is granted by hand and has no scheduled allowance.
+		if (amount === null) return null
+
+		return { amount, reference: `refill:${workspaceId}:${monthKey(at)}` }
+	},
+
+	/**
 	 * Resets the plan bucket for the current period. Plan credits do not roll
 	 * over, so this SETS the bucket rather than adding to it.
 	 *
@@ -323,16 +361,25 @@ export const billingService = {
 	 */
 	async refillPlanCredits(workspaceId: string, at = new Date()) {
 		const plan = await this.getPlan(workspaceId)
-		const seats = await workspaceRepository.countMembers(workspaceId)
-		const amount = creditsForPeriod(plan, seats)
+		const scheduled = await this.scheduledRefill(workspaceId, plan, at)
 
-		// Free gets a one-time signup grant instead, and enterprise is granted by
-		// hand. Neither has a scheduled refill.
-		if (amount === null) {
+		if (!scheduled) {
+			/**
+			 * Nothing to grant — but the clock still has to move. `planResetAt` is
+			 * what the scan selects on, so a workspace left behind on an elapsed
+			 * date is re-read and re-enqueued on every tick, forever. That was true
+			 * of every free workspace before this.
+			 */
+			await db.transaction(async (tx) => {
+				await billingRepository.createBalanceIfMissing(workspaceId, tx)
+				await billingRepository.setBalance(
+					workspaceId,
+					{ planResetAt: nextPeriodStart(at) },
+					tx,
+				)
+			})
 			return { refilled: false, reason: "plan_has_no_scheduled_refill" as const }
 		}
-
-		const reference = `refill:${workspaceId}:${monthKey(at)}`
 
 		return db.transaction(async (tx) => {
 			await billingRepository.createBalanceIfMissing(workspaceId, tx)
@@ -345,23 +392,31 @@ export const billingService = {
 					organizationId: workspaceId,
 					kind: "plan_refill",
 					bucket: "plan",
-					amount: toAmount(amount),
-					reference,
+					amount: toAmount(scheduled.amount),
+					reference: scheduled.reference,
 				},
 				tx,
 			)
 
 			if (!inserted) {
+				// Already granted this month — on this workspace, or on another one
+				// belonging to the same account when the plan is free. The clock
+				// still moves, or the scan would keep returning this row.
+				await billingRepository.setBalance(
+					workspaceId,
+					{ planResetAt: nextPeriodStart(at) },
+					tx,
+				)
 				return { refilled: false, reason: "already_refilled" as const }
 			}
 
 			await billingRepository.setBalance(
 				workspaceId,
-				{ planCredits: toAmount(amount), planResetAt: nextPeriodStart(at) },
+				{ planCredits: toAmount(scheduled.amount), planResetAt: nextPeriodStart(at) },
 				tx,
 			)
 
-			return { refilled: true, amount, plan }
+			return { refilled: true, amount: scheduled.amount, plan }
 		})
 	},
 

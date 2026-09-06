@@ -56,10 +56,11 @@ export interface PlanLimits {
 }
 
 /**
- * Free is a **one-time** grant, not a monthly allowance: both `creditsPerSeat`
- * and `flatCredits` are null, so the refill job skips it entirely and
- * `SIGNUP_GRANT_CREDITS` is all a free workspace ever gets. A monthly free
- * allowance is a standing bill with no conversion pressure.
+ * Free carries no per-workspace allowance — `creditsPerSeat` and `flatCredits`
+ * are both null — because its allowance belongs to the *account*, not to each
+ * workspace. See `FREE_MONTHLY_CREDITS`: it is granted once a month to the one
+ * workspace a person created first, so a second free workspace is worth nothing
+ * to create and the standing bill is capped per person rather than per row.
  */
 export const PLAN_LIMITS: Record<PlanName, PlanLimits> = {
 	free: {
@@ -102,11 +103,32 @@ export const PLAN_LIMITS: Record<PlanName, PlanLimits> = {
 }
 
 /**
- * One-time credits every new workspace gets. Sized so a free trial is a real
- * trial: on economy models this is roughly 140 retrieval-augmented chat turns
- * plus document ingestion, at well under a dollar of provider cost.
+ * One-time credits an **account** gets, on the first workspace it creates.
+ *
+ * Lands in the top-up bucket, so it rolls over and is spent only after the
+ * month's allowance below is gone — a trial that evaporated at the month
+ * boundary would not be one.
+ *
+ * Sized together with `FREE_MONTHLY_CREDITS`, because a new account gets both:
+ * 100k in the first month, 50k a month after that. It used to be 300k *per
+ * workspace*, which was both a bigger free tier than the product needs and a
+ * tap — a new workspace minted a new trial.
  */
-export const SIGNUP_GRANT_CREDITS = 300_000
+export const SIGNUP_GRANT_CREDITS = 50_000
+
+/**
+ * The free plan's monthly allowance, granted to one workspace per account.
+ *
+ * Per account and per month, not per workspace: the ledger reference carries the
+ * owner's id, so creating workspaces — or deleting the first one to make a new
+ * "first" — cannot claim it twice in a month. A second free workspace is
+ * therefore worth nothing to create, which is the point.
+ *
+ * Lands in the plan bucket, which does not roll over and is spent before the
+ * trial. An account that ignores the product for three months has 50k waiting,
+ * not 150k.
+ */
+export const FREE_MONTHLY_CREDITS = 50_000
 
 /**
  * Top-up packs. Never expire and are spent only after the plan bucket is empty.
