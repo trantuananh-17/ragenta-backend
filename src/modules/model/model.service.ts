@@ -5,13 +5,13 @@ import {
 	isProviderConfigured,
 	listCatalogue,
 } from "../../ai/catalogue"
-import { DEFAULT_CHAT, DEFAULT_EMBEDDING } from "../../ai/models"
 import type { ModelCapability } from "../../ai/models"
 import { EntitlementError, ValidationError } from "../../shared/errors"
 import { auditService } from "../audit/audit.service"
 import { billingService } from "../billing/billing.service"
 import { planLimits } from "../billing/plans"
 import { projectRepository } from "../project/project.repository"
+import { providerService } from "../provider/provider.service"
 import { modelRepository } from "./model.repository"
 import type { UpdateModelSettingsInput } from "./model.dto"
 
@@ -67,21 +67,29 @@ export const modelService = {
 	},
 
 	/**
-	 * Current selection, falling back to the built-in economy defaults so a
-	 * workspace that has never opened settings still runs.
+	 * Current selection, falling back to the platform default so a workspace that
+	 * has never opened settings still runs.
+	 *
+	 * The fallback is the administrator's choice, not a compiled constant. The
+	 * built-in defaults name Anthropic and OpenAI, and a deployment holding
+	 * neither key — one running entirely through OpenRouter, say — would have
+	 * every workspace that never opened this screen resolve to a provider it
+	 * cannot call. `providerService.getPlatformDefaults()` still ends at those
+	 * constants when nothing has been set, so the chain is
+	 * workspace → platform → built-in.
 	 */
 	async getSettings(workspaceId: string) {
 		const row = await modelRepository.findSettings(workspaceId)
-
-		return {
-			chat: row
-				? { provider: row.chatProvider, model: row.chatModel }
-				: { ...DEFAULT_CHAT },
-			embedding: row
-				? { provider: row.embeddingProvider, model: row.embeddingModel }
-				: { ...DEFAULT_EMBEDDING },
-			isDefault: !row,
+		if (row) {
+			return {
+				chat: { provider: row.chatProvider, model: row.chatModel },
+				embedding: { provider: row.embeddingProvider, model: row.embeddingModel },
+				isDefault: false,
+			}
 		}
+
+		const defaults = await providerService.getPlatformDefaults()
+		return { chat: defaults.chat, embedding: defaults.embedding, isDefault: true }
 	},
 
 	async updateSettings(
@@ -152,7 +160,9 @@ export const modelService = {
 
 		if (!(await isProviderConfigured(definition.provider))) {
 			throw new ValidationError(
-				`The ${definition.provider} provider is not configured on this deployment.`,
+				`The ${definition.provider} provider is not configured on this deployment. ` +
+					"An administrator must store its API key, or point the platform default " +
+					"for this capability at a provider that has one.",
 				selection,
 			)
 		}
