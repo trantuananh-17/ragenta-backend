@@ -17,7 +17,7 @@ import {
 import { modelService } from "../model/model.service"
 import { usageService } from "../usage/usage.service"
 import { countPdfPages, resolveFormat } from "./extractor"
-import { embeddingText, enrichChunks } from "./enrichment"
+import { embeddingText, enrichChunks, enrichmentText } from "./enrichment"
 import type { NewChunk } from "./knowledge.repository"
 import { knowledgeRepository } from "./knowledge.repository"
 import { resolveParserConfig, runParser } from "./parsers"
@@ -477,6 +477,11 @@ export const ingestionService = {
 			question: entry.question,
 			keywords: keywords[index] ?? [],
 			questions: questions[index] ?? [],
+			enrichmentText: enrichmentText({
+				question: entry.question,
+				keywords: keywords[index] ?? [],
+				questions: questions[index] ?? [],
+			}),
 			fromPage: entry.fromPage,
 			toPage: entry.toPage,
 			digest: task.digest,

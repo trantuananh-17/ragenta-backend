@@ -32,6 +32,7 @@ ALTER TABLE "chunk" ADD COLUMN "kind" text DEFAULT 'passage' NOT NULL;--> statem
 ALTER TABLE "chunk" ADD COLUMN "question" text;--> statement-breakpoint
 ALTER TABLE "chunk" ADD COLUMN "keywords" text[] DEFAULT '{}' NOT NULL;--> statement-breakpoint
 ALTER TABLE "chunk" ADD COLUMN "questions" text[] DEFAULT '{}' NOT NULL;--> statement-breakpoint
+ALTER TABLE "chunk" ADD COLUMN "enrichment_text" text;--> statement-breakpoint
 ALTER TABLE "chunk" ADD COLUMN "level" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
 ALTER TABLE "chunk" ADD COLUMN "parent_chunk_id" text;--> statement-breakpoint
 ALTER TABLE "chunk" ADD COLUMN "from_page" integer;--> statement-breakpoint
@@ -68,6 +69,6 @@ CREATE INDEX "conversationKnowledgeBase_knowledgeBaseId_idx" ON "conversation_kn
 CREATE INDEX "ingestionTask_documentId_attempt_idx" ON "ingestion_task" USING btree ("document_id","attempt");--> statement-breakpoint
 CREATE INDEX "ingestionTask_digest_idx" ON "ingestion_task" USING btree ("digest");--> statement-breakpoint
 CREATE INDEX "chunk_documentId_digest_idx" ON "chunk" USING btree ("document_id","digest");--> statement-breakpoint
-CREATE INDEX "chunk_content_fts_idx" ON "chunk" USING gin (to_tsvector('simple', "content" || ' ' || coalesce("question", '') || ' ' || array_to_string("keywords", ' ') || ' ' || array_to_string("questions", ' ')));--> statement-breakpoint
+CREATE INDEX "chunk_content_fts_idx" ON "chunk" USING gin (to_tsvector('simple', "content" || ' ' || coalesce("enrichment_text", '')));--> statement-breakpoint
 ALTER TABLE "provider_model" ADD CONSTRAINT "providerModel_capability_check" CHECK ("provider_model"."capability" in ('chat', 'embedding', 'rerank'));--> statement-breakpoint
 ALTER TABLE "conversation" ADD CONSTRAINT "conversation_searchMode_check" CHECK ("conversation"."search_mode" in ('hybrid', 'vector', 'keyword'));

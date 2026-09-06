@@ -363,11 +363,12 @@ export const knowledgeRepository = {
 		if (baseIds.length === 0) return []
 
 		const tsquery = sql`websearch_to_tsquery('simple', ${queryText})`
-		// Matches the expression the GIN index is built on, or Postgres cannot use
-		// it. The enrichment columns are in both: a keyword a model added exists
-		// precisely because the passage does not contain the word people search
-		// for, and leaving it out of the query makes generating it pointless.
-		const tsvector = sql`to_tsvector('simple', ${chunk.content} || ' ' || coalesce(${chunk.question}, '') || ' ' || array_to_string(${chunk.keywords}, ' ') || ' ' || array_to_string(${chunk.questions}, ' '))`
+		// Must match the expression the GIN index is built on character for
+		// character, or Postgres plans a sequential scan over every chunk in the
+		// workspace. The enrichment is in both: a keyword a model added exists
+		// precisely because the passage lacks the word people search for, and
+		// leaving it out of the query would make generating it pointless.
+		const tsvector = sql`to_tsvector('simple', ${chunk.content} || ' ' || coalesce(${chunk.enrichmentText}, ''))`
 
 		// The document filter belongs on *both* halves of hybrid retrieval. It was
 		// once only on the dense half, and a question scoped to one file could

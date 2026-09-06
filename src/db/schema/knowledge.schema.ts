@@ -235,6 +235,22 @@ export const chunk = pgTable(
 		questions: text("questions").array().default([]).notNull(),
 
 		/**
+		 * The enrichment above, flattened to one string, purely so it can be
+		 * indexed.
+		 *
+		 * A Postgres index expression must be IMMUTABLE, and `array_to_string` is
+		 * only STABLE — so an index over the arrays directly is rejected, which is
+		 * exactly how the first attempt at this migration failed. Writing the
+		 * flattened copy at ingestion time keeps the index expression to `||`,
+		 * `coalesce` and `to_tsvector`, all of which are immutable.
+		 *
+		 * It duplicates the enrichment, not the passage: `content` is never copied
+		 * here, so the cost is the keywords and questions a model wrote, not the
+		 * document itself.
+		 */
+		enrichmentText: text("enrichment_text"),
+
+		/**
 		 * RAPTOR tree level. 0 is a real passage from the document; 1 and above are
 		 * model-written summaries over a cluster of the level below, which is what
 		 * lets a question about the whole document match something.
@@ -266,7 +282,7 @@ export const chunk = pgTable(
 		 */
 		index("chunk_content_fts_idx").using(
 			"gin",
-			sql`to_tsvector('simple', ${table.content} || ' ' || coalesce(${table.question}, '') || ' ' || array_to_string(${table.keywords}, ' ') || ' ' || array_to_string(${table.questions}, ' '))`,
+			sql`to_tsvector('simple', ${table.content} || ' ' || coalesce(${table.enrichmentText}, ''))`,
 		),
 	],
 )

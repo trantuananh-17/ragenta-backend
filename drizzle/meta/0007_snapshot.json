@@ -1,5 +1,5 @@
 {
-  "id": "c3213bf0-90b5-4b43-a317-4eb3fd2cd6f7",
+  "id": "d7cb78ce-c8eb-4fcd-8a81-e147c52cec4d",
   "prevId": "ad835850-9d38-484f-8a44-fa0cdd8503bd",
   "version": "7",
   "dialect": "postgresql",
@@ -2518,6 +2518,12 @@
           "notNull": true,
           "default": "'{}'"
         },
+        "enrichment_text": {
+          "name": "enrichment_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "level": {
           "name": "level",
           "type": "integer",
@@ -2619,7 +2625,7 @@
           "name": "chunk_content_fts_idx",
           "columns": [
             {
-              "expression": "to_tsvector('simple', \"content\" || ' ' || coalesce(\"question\", '') || ' ' || array_to_string(\"keywords\", ' ') || ' ' || array_to_string(\"questions\", ' '))",
+              "expression": "to_tsvector('simple', \"content\" || ' ' || coalesce(\"enrichment_text\", ''))",
               "asc": true,
               "isExpression": true,
               "nulls": "last"

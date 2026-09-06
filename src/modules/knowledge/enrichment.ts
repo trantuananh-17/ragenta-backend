@@ -202,3 +202,32 @@ export function embeddingText(chunk: {
 
 	return lead.length > 0 ? `${lead.join("\n")}\n\n${chunk.content}` : chunk.content
 }
+
+/**
+ * The same enrichment, flattened for the full-text index.
+ *
+ * It exists because a Postgres index expression must be IMMUTABLE and
+ * `array_to_string` is only STABLE, so indexing the `keywords` and `questions`
+ * arrays directly is rejected — which is exactly how the first attempt at
+ * migration 0007 failed on staging. Writing the flattened copy here keeps the
+ * index expression to `||`, `coalesce` and `to_tsvector`, all immutable.
+ *
+ * Kept beside `embeddingText` so the two cannot drift on what counts as
+ * enrichment: a term that steers the vector but not the keyword search, or the
+ * reverse, is a passage findable one way and not the other for no reason a user
+ * could work out.
+ *
+ * Null when there is nothing to add, so the column stays empty for every chunk
+ * of a knowledge base with enrichment switched off.
+ */
+export function enrichmentText(chunk: {
+	question?: string | null
+	keywords?: string[]
+	questions?: string[]
+}): string | null {
+	const parts = [chunk.question ?? "", ...(chunk.keywords ?? []), ...(chunk.questions ?? [])]
+		.map((part) => part.trim())
+		.filter((part) => part.length > 0)
+
+	return parts.length > 0 ? parts.join(" ") : null
+}
