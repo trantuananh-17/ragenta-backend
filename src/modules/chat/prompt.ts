@@ -31,15 +31,55 @@ Answer the user's question using the numbered passages provided. Rules:
 - Answer in the language the question is asked in.
 - Be direct. Do not restate the question or describe what you are about to do.`
 
-const NO_CONTEXT_PROMPT = `You are Ragenta, an assistant.
+/** Retrieval ran and found nothing, and the thread insists on the documents. */
+const NO_RESULTS_PROMPT = `You are Ragenta, a retrieval-augmented assistant.
 
-No documents were retrieved for this question. Say that you could not find anything relevant in the knowledge base, and answer from general knowledge only if you can do so accurately — make clear which part is not grounded in the documents.`
+Nothing in the knowledge base matched this question. Say so plainly, in the language the question was asked in, and stop. Do not answer from general knowledge — this conversation is set to answer only from its documents. If the question can be narrowed or rephrased to search better, suggest that in one sentence.`
 
-export interface PromptBudget {
+/** Retrieval ran and found nothing, and the thread allows a fallback answer. */
+const NO_RESULTS_OPEN_PROMPT = `You are Ragenta, a retrieval-augmented assistant.
+
+Nothing in the knowledge base matched this question. Say that first, then answer from general knowledge if you can do so accurately. Make the boundary explicit: the reader must be able to tell which part came from their documents (none of it, here) and which part did not. If you are not confident, say you do not know rather than guessing.`
+
+/**
+ * No knowledge base is attached at all.
+ *
+ * Distinct from finding nothing, and the distinction is the whole point: a
+ * thread with no retrieval is an ordinary assistant, and opening every answer
+ * with "I could not find that in the knowledge base" — which is what a shared
+ * prompt did — describes a search the user never asked for.
+ */
+const OPEN_PROMPT = `You are Ragenta, a helpful assistant.
+
+This conversation has no knowledge base attached, so answer from your own knowledge. Be direct, say when you are unsure, and answer in the language the question is asked in. Do not mention documents, passages or retrieval — none were requested.`
+
+/**
+ * What the turn is allowed to answer from. The caller states the intent; whether
+ * passages actually survived the token budget is decided here, because only this
+ * function knows that.
+ */
+export type Grounding =
+	/** Retrieval is attached and the answer must stay inside what it returned. */
+	| "documents"
+	/** Retrieval is attached, but a question it cannot answer may still be answered. */
+	| "documents-open"
+	/** No knowledge base on this thread. */
+	| "open"
+
+function systemPrompt(grounding: Grounding, hasPassages: boolean): string {
+	if (grounding === "open") return OPEN_PROMPT
+	if (hasPassages) return SYSTEM_PROMPT
+	// Retrieval was asked for and returned nothing usable. Which of the two
+	// empty-handed prompts applies is the thread's own setting.
+	return grounding === "documents" ? NO_RESULTS_PROMPT : NO_RESULTS_OPEN_PROMPT
+}
+
+export interface PromptOptions {
 	/** The model's context window, or a conservative default when it has none recorded. */
 	contextWindow: number
 	/** Reserved for the answer. */
 	maxOutputTokens: number
+	grounding: Grounding
 }
 
 export interface AssembledPrompt {
@@ -87,9 +127,9 @@ export function assemblePrompt(
 	question: string,
 	chunks: RetrievedChunk[],
 	history: ChatMessage[],
-	budget: PromptBudget,
+	options: PromptOptions,
 ): AssembledPrompt {
-	const available = budget.contextWindow - budget.maxOutputTokens - estimateTokens(question)
+	const available = options.contextWindow - options.maxOutputTokens - estimateTokens(question)
 
 	const used: RetrievedChunk[] = []
 	let spent = estimateTokens(SYSTEM_PROMPT)
@@ -113,7 +153,7 @@ export function assemblePrompt(
 	}
 
 	const messages: ChatMessage[] = [
-		{ role: "system", content: used.length > 0 ? SYSTEM_PROMPT : NO_CONTEXT_PROMPT },
+		{ role: "system", content: systemPrompt(options.grounding, used.length > 0) },
 		...trimmedHistory,
 	]
 

@@ -82,7 +82,11 @@ export const modelService = {
 						model: entry.model,
 						capability: entry.capability,
 						tier: entry.tier,
-						contextWindow: entry.contextWindow,
+						// Coalesced rather than passed through: an embedding model has no
+						// context window, and JSON.stringify drops an undefined value
+						// entirely, so the key would be missing rather than null and every
+						// client parsing this payload would reject the whole catalogue.
+						contextWindow: entry.contextWindow ?? null,
 						configured: callable,
 						entitled,
 						selectable: callable && entitled,

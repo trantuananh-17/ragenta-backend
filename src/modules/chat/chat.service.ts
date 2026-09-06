@@ -22,6 +22,8 @@ import { usageService } from "../usage/usage.service"
 import { chatRepository } from "./chat.repository"
 import type { ConversationRow } from "./chat.repository"
 import { assemblePrompt } from "./prompt"
+import type { Grounding } from "./prompt"
+import { refineQuery } from "./refine"
 import { clearStop, isStopRequested, requestStop } from "./stop-signal"
 import type {
 	CreateConversationInput,
@@ -33,6 +35,9 @@ const log = logger.child({ module: "chat" })
 
 /** Turns of history sent with a question. Beyond this the prompt is mostly past. */
 const HISTORY_TURNS = 10
+
+/** What a step that did not run consumed. */
+const EMPTY_USAGE: TokenUsage = { inputTokens: 0, outputTokens: 0 }
 
 /** Reserved for the answer, and the ceiling on what one turn can cost in output. */
 const MAX_OUTPUT_TOKENS = 2_000
@@ -79,6 +84,10 @@ interface TurnContext {
 	messages: ChatMessage[]
 	citations: MessageCitation[]
 	rerankUsage: RetrievalOutcome["rerankUsage"]
+	/** Set only when the follow-up was actually rewritten, and only to show it. */
+	searchedFor: string | null
+	/** The rewrite is a model call on the customer's model, so it is charged. */
+	refineUsage: TokenUsage
 }
 
 export type ChatStreamEvent =
@@ -93,6 +102,13 @@ export type ChatStreamEvent =
 	 * neither search nor generation knows how far along it is.
 	 */
 	| { type: "phase"; phase: "retrieving" | "generating" }
+	/**
+	 * The standalone question retrieval actually searched for, when it differs
+	 * from what was typed. Shown rather than hidden: a rewrite that misreads the
+	 * thread is otherwise invisible, and the user is the only one who can see
+	 * that it went wrong.
+	 */
+	| { type: "query"; question: string }
 	| { type: "citations"; citations: MessageCitation[] }
 	| { type: "delta"; text: string }
 	| {
@@ -183,6 +199,8 @@ export const chatService = {
 			vectorWeight: input.vectorWeight?.toFixed(3) ?? null,
 			rerankProvider: input.rerank?.provider ?? null,
 			rerankModel: input.rerank?.model ?? null,
+			groundedOnly: input.groundedOnly ?? true,
+			refineFollowUps: input.refineFollowUps ?? true,
 			createdBy: actorId,
 		})
 
@@ -235,6 +253,10 @@ export const chatService = {
 						rerankProvider: input.rerank?.provider ?? null,
 						rerankModel: input.rerank?.model ?? null,
 					}
+				: {}),
+			...(input.groundedOnly !== undefined ? { groundedOnly: input.groundedOnly } : {}),
+			...(input.refineFollowUps !== undefined
+				? { refineFollowUps: input.refineFollowUps }
 				: {}),
 		})
 		if (!updated) throw new NotFoundError("Conversation")
@@ -418,6 +440,44 @@ export const chatService = {
 			...conversation.additionalKnowledgeBaseIds,
 		]
 
+		const history = (
+			// One extra row, because the question being answered was written before
+			// this call and would otherwise take a slot in the window it is not part
+			// of — it is passed to the prompt separately.
+			await chatRepository.listRecentMessages(conversation.id, HISTORY_TURNS * 2 + 1)
+		)
+			.filter((row) => row.id !== turn.userMessageId)
+			// A failed turn left its error on the row and no useful content; feeding
+			// it back would teach the model that failing is a normal answer. A
+			// stopped one is different: it is a real, shorter answer the user read,
+			// and dropping it from the history would make the next turn respond to a
+			// conversation that never happened.
+			.filter((row) => row.status === "complete" || row.status === "stopped")
+			.map<ChatMessage>((row) => ({
+				role: row.role === "assistant" ? "assistant" : "user",
+				content: row.content,
+			}))
+
+		/**
+		 * The question is rewritten for *retrieval only*, never for the prompt.
+		 *
+		 * The model is given the real thread and the words the user actually typed,
+		 * because that is what it should be answering. Retrieval gets one string
+		 * with no conversation around it, and that is the half a follow-up breaks.
+		 * Skipped without retrieval attached — there is nothing to search, so the
+		 * call would be paid for and thrown away.
+		 */
+		const refined =
+			baseIds.length > 0 && conversation.refineFollowUps
+				? await refineQuery({
+						client: turn.client,
+						credential: await requireCredential(turn.selection.provider),
+						model: turn.selection.model,
+						question: input.content,
+						history,
+					})
+				: { question: input.content, keywords: [], rewritten: false, usage: EMPTY_USAGE }
+
 		let retrieved: RetrievedChunk[] = []
 		let rerankUsage: RetrievalOutcome["rerankUsage"] = null
 
@@ -425,7 +485,8 @@ export const chatService = {
 			const outcome = await retrievalService.retrieve({
 				workspaceId,
 				knowledgeBaseIds: baseIds,
-				question: input.content,
+				question: refined.question,
+				keywords: refined.keywords,
 				// Per-turn override, then the thread's setting, then the base's.
 				topK: input.topK ?? conversation.topK ?? undefined,
 				mode: input.searchMode ?? (conversation.searchMode as SearchMode),
@@ -449,27 +510,17 @@ export const chatService = {
 			rerankUsage = outcome.rerankUsage
 		}
 
-		const history = (
-			// One extra row, because the question being answered was written before
-			// this call and would otherwise take a slot in the window it is not part
-			// of — it is passed to the prompt separately.
-			await chatRepository.listRecentMessages(conversation.id, HISTORY_TURNS * 2 + 1)
-		)
-			.filter((row) => row.id !== turn.userMessageId)
-			// A failed turn left its error on the row and no useful content; feeding
-			// it back would teach the model that failing is a normal answer. A
-			// stopped one is different: it is a real, shorter answer the user read,
-			// and dropping it from the history would make the next turn respond to a
-			// conversation that never happened.
-			.filter((row) => row.status === "complete" || row.status === "stopped")
-			.map<ChatMessage>((row) => ({
-				role: row.role === "assistant" ? "assistant" : "user",
-				content: row.content,
-			}))
+		const grounding: Grounding =
+			baseIds.length === 0
+				? "open"
+				: conversation.groundedOnly
+					? "documents"
+					: "documents-open"
 
 		const { messages, used } = assemblePrompt(input.content, retrieved, history, {
 			contextWindow: definition?.contextWindow ?? FALLBACK_CONTEXT_WINDOW,
 			maxOutputTokens: MAX_OUTPUT_TOKENS,
+			grounding,
 		})
 
 		const citations: MessageCitation[] = used.map((entry, index) => ({
@@ -484,7 +535,13 @@ export const chatService = {
 			toPage: entry.toPage,
 		}))
 
-		return { messages, citations, rerankUsage }
+		return {
+			messages,
+			citations,
+			rerankUsage,
+			searchedFor: refined.rewritten ? refined.question : null,
+			refineUsage: refined.usage,
+		}
 	},
 
 	/**
@@ -511,7 +568,13 @@ export const chatService = {
 		yield { type: "start", messageId: turn.assistantMessageId }
 
 		const credential = await requireCredential(turn.selection.provider)
-		let context: TurnContext = { messages: [], citations: [], rerankUsage: null }
+		let context: TurnContext = {
+			messages: [],
+			citations: [],
+			rerankUsage: null,
+			searchedFor: null,
+			refineUsage: EMPTY_USAGE,
+		}
 		let answer = ""
 		let usage = { inputTokens: 0, outputTokens: 0 }
 		let failure: string | undefined
@@ -546,6 +609,29 @@ export const chatService = {
 					metadata: {
 						conversationId: turn.conversation.id,
 						tokensEstimated: context.rerankUsage.estimated,
+					},
+				})
+			}
+
+			/**
+			 * The rewrite is a call on the customer's own chat model. The provider
+			 * billed for it the moment it answered, so it is charged whatever
+			 * happened next — the same rule the reranker above follows.
+			 */
+			if (context.refineUsage.inputTokens + context.refineUsage.outputTokens > 0) {
+				await usageService.recordAndCharge({
+					workspaceId,
+					projectId: turn.conversation.projectId,
+					userId: turn.actorId,
+					operation: "chat",
+					provider: turn.selection.provider,
+					model: turn.selection.model,
+					inputTokens: context.refineUsage.inputTokens,
+					outputTokens: context.refineUsage.outputTokens,
+					reference: `refine:${turn.assistantMessageId}`,
+					metadata: {
+						conversationId: turn.conversation.id,
+						step: "question_refinement",
 					},
 				})
 			}
@@ -668,6 +754,7 @@ export const chatService = {
 			return
 		}
 
+		if (context.searchedFor) yield { type: "query", question: context.searchedFor }
 		yield { type: "citations", citations: context.citations }
 		yield { type: "phase", phase: "generating" }
 

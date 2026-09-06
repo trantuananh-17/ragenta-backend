@@ -57,6 +57,20 @@
       "when": 1788672075742,
       "tag": "0007_right_maginty",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788700543898,
+      "tag": "0008_flowery_sentinel",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788700549415,
+      "tag": "0009_signup_grant_per_user",
+      "breakpoints": true
     }
   ]
 }

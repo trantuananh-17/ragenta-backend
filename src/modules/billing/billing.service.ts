@@ -62,8 +62,11 @@ export const billingService = {
 	/**
 	 * Gives a workspace its billing rows. Idempotent, so it is safe to call on
 	 * every workspace creation and again from a repair script.
+	 *
+	 * `ownerId` is who created it, and it is required because the trial grant
+	 * belongs to that person rather than to the workspace.
 	 */
-	async provisionWorkspace(workspaceId: string): Promise<void> {
+	async provisionWorkspace(workspaceId: string, ownerId: string): Promise<void> {
 		await billingRepository.createBalanceIfMissing(workspaceId)
 		await billingRepository.createSubscriptionIfMissing({
 			id: newId(),
@@ -78,13 +81,23 @@ export const billingService = {
 		 * The trial credits land in the top-up bucket, not the plan bucket: the
 		 * plan bucket is reset by every refill, and a one-time grant that a later
 		 * upgrade would silently erase is not a grant.
+		 *
+		 * The reference is the *person*, not the workspace. Keyed by workspace it
+		 * was a free-credit tap — create a workspace, spend the trial, create
+		 * another — and the unique `(kind, reference)` index is what closes it:
+		 * the second workspace's grant is refused by the database rather than by
+		 * a read-then-write that two parallel creations could both pass.
+		 *
+		 * A second workspace therefore starts empty, and is funded by a top-up or
+		 * by the plan it is put on. That is the intended shape: the trial is
+		 * something an account gets once.
 		 */
 		await this.grant({
 			workspaceId,
 			amount: SIGNUP_GRANT_CREDITS,
 			bucket: "topup",
 			kind: "signup_grant",
-			reference: `signup:${workspaceId}`,
+			reference: `signup:user:${ownerId}`,
 			reason: "Signup trial credits",
 		})
 

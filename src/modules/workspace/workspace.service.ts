@@ -64,7 +64,7 @@ export const workspaceService = {
 
 		// Provisioning is separate from creation on purpose: it is idempotent and
 		// can be re-run for a workspace whose billing rows are missing.
-		await billingService.provisionWorkspace(created.id)
+		await billingService.provisionWorkspace(created.id, actorId)
 
 		await auditService.record({
 			action: "workspace.created",

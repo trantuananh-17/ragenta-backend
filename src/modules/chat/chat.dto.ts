@@ -18,6 +18,15 @@ const retrievalSettingsSchema = {
 		.object({ provider: z.string().trim().min(1), model: z.string().trim().min(1) })
 		.nullable()
 		.optional(),
+	/**
+	 * Answer only from the retrieved documents. Ignored by a thread with no
+	 * knowledge base — there is nothing to be grounded in — and on by default,
+	 * because a citation-bearing product that quietly falls back to the model's
+	 * own memory is the failure mode this whole feature exists to avoid.
+	 */
+	groundedOnly: z.boolean().optional(),
+	/** Rewrite a follow-up into a standalone question before searching. */
+	refineFollowUps: z.boolean().optional(),
 }
 
 export const createConversationSchema = z.object({

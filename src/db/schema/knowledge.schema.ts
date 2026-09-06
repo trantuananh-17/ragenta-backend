@@ -386,6 +386,25 @@ export const conversation = pgTable(
 		rerankProvider: text("rerank_provider"),
 		rerankModel: text("rerank_model"),
 
+		/**
+		 * Whether an answer may leave the documents.
+		 *
+		 * Only meaningful with a knowledge base attached — a thread with none is
+		 * an ordinary assistant and there is nothing to be grounded in. On, the
+		 * model says the documents do not cover the question and stops; off, it
+		 * may answer from what it knows and must mark that part as ungrounded.
+		 * RAGFlow calls the same setting "empty response".
+		 */
+		groundedOnly: boolean("grounded_only").default(true).notNull(),
+		/**
+		 * Rewrites a follow-up into a standalone question before retrieval.
+		 *
+		 * "How much is that?" carries its subject in the previous turn, not in
+		 * itself, so the vector built from it matches nothing. Costs one small
+		 * model call per turn that has history, which is why it can be turned off.
+		 */
+		refineFollowUps: boolean("refine_follow_ups").default(true).notNull(),
+
 		createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 		updatedAt: timestamp("updated_at")

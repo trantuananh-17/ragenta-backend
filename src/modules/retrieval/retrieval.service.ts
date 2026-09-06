@@ -88,6 +88,16 @@ export interface RetrieveOptions {
 	/** One or more bases, all of which must share an embedding model. */
 	knowledgeBaseIds: string[]
 	question: string
+	/**
+	 * Extra search terms for the lexical half only.
+	 *
+	 * RAGFlow appends its extracted keywords to the query string, which feeds them
+	 * to both halves. They are kept off the vector here on purpose: an embedding of
+	 * "question + a list of nouns" is not the embedding of the question, and the
+	 * dense half is the one that was already working. Term search is where a
+	 * repeated product code earns its weight.
+	 */
+	keywords?: string[]
 	topK?: number
 	similarityThreshold?: number
 	vectorWeight?: number
@@ -214,7 +224,7 @@ export const retrievalService = {
 				? knowledgeRepository.searchChunksByText(
 						options.workspaceId,
 						baseIds,
-						options.question,
+						[options.question, ...(options.keywords ?? [])].join(" "),
 						candidateLimit,
 						options.documentIds,
 					)
