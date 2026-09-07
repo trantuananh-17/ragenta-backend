@@ -1,10 +1,26 @@
 import { z } from "zod"
 
 import type { ChatCapableClient, ChatMessage, ProviderCredential } from "../../../ai/clients"
+import { ValidationError } from "../../../shared/errors"
 import { retrievalService } from "../../retrieval/retrieval.service"
 import type { CitationCollector } from "../citations"
 import { runToolLoop } from "../loop"
 import { toolsFor } from "../tools"
+import type { ToolId } from "../tools"
+import {
+	browserNodeParams,
+	carriedValues,
+	excelNodeParams,
+	httpNodeParams,
+	LOOP_SCOPE,
+	loopNodeParams,
+	ocrNodeParams,
+	parseLoopItems,
+	plannedIterations,
+	sttNodeParams,
+	ttsNodeParams,
+	visionNodeParams,
+} from "./node-params"
 import type { NodeOutput } from "./types"
 import type { GraphNode } from "./types"
 import { resolveTemplate } from "./types"
@@ -51,6 +67,18 @@ export interface NodeContext {
 		payload: Record<string, unknown>
 		output: Record<string, unknown>
 	}): Promise<void>
+	/**
+	 * Runs one node as a loop's body, and the only way a `loop` node reaches it.
+	 *
+	 * Installed by the engine, like `values`, rather than passed in by the caller:
+	 * `runner.ts` builds this context and has neither the graph nor the run's node
+	 * budget, and both are needed to run a body node at all. Optional because a
+	 * context built outside a graph has no engine to install it — a `loop` node
+	 * given one refuses rather than half-working.
+	 */
+	runBody?(bodyNodeId: string): AsyncGenerator<NodeEvent, NodeOutput>
+	/** What is left of the run-wide node budget. Also installed by the engine. */
+	remainingExecutions?(): number
 }
 
 /** What a node emits while it runs. Deltas reach the browser as they happen. */
@@ -477,6 +505,278 @@ const messageNode: NodeImplementation = {
 	},
 }
 
+// ---------------------------------------------------------------------------
+// Tool nodes. Seven node types, one implementation each of nothing.
+
+/**
+ * Runs a registry tool as a node.
+ *
+ * Every tool node below is this function plus a params schema. The capabilities
+ * — OCR, transcription, a rendered page, a workbook — are already built and
+ * already have one implementation each (`../tools/`); a node that re-did any of
+ * them would be the second answer this phase exists to avoid, and the second
+ * place for the SSRF check or the attachment scoping to be got wrong. What a
+ * node adds is what the tool is given, and who is charged for it.
+ */
+async function* runToolNode(
+	context: NodeContext,
+	node: GraphNode,
+	nodeId: string,
+	toolId: ToolId,
+	args: Record<string, unknown>,
+): AsyncGenerator<NodeEvent, NodeOutput> {
+	const [tool] = toolsFor([toolId], context.knowledgeBaseIds, context.citations)
+	if (!tool) throw new ValidationError(`This deployment has no "${toolId}" step.`)
+
+	const argumentsJson = JSON.stringify(args)
+	yield { type: "tool_started", name: tool.name, arguments: argumentsJson }
+
+	const result = await tool.execute(
+		{
+			// From the run, never from the node's params. A flow author who could
+			// type a workspace id into a step would be typing somebody else's
+			// (`.claude/rules/security.md`).
+			workspaceId: context.workspaceId,
+			projectId: context.projectId,
+			userId: context.userId,
+			runId: context.runId,
+			// Names a generated artefact — `speech-{run}-{seq}.mp3` — and nothing
+			// else. Storage keys come from the new row's id, so a repeated number
+			// collides with nothing; `runner.ts` passes a constant here for the same
+			// reason.
+			stepSeq: 0,
+			signal: context.signal,
+		},
+		args,
+	)
+
+	yield {
+		type: "tool_finished",
+		name: tool.name,
+		ok: result.ok,
+		summary: result.content.slice(0, 200),
+	}
+
+	if (result.usage) {
+		await context.charge({
+			kind: "tool",
+			nodeId,
+			name: node.label || tool.name,
+			provider: result.usage.provider,
+			model: result.usage.model,
+			operation: result.usage.operation,
+			inputTokens: result.usage.inputTokens,
+			outputTokens: result.usage.outputTokens,
+			estimated: false,
+			payload: { arguments: argumentsJson },
+			output: result.metadata,
+		})
+	} else {
+		// No `usage` means there is nothing here to charge, and that is a decision
+		// the tools already made rather than an omission. `http`, `excel` and
+		// `browser` call no provider at all; the speech tools call one, but
+		// `speechService` reserves and charges for it itself — which is also why
+		// `charge` has no `"speech"` operation to widen it with. Charging here would
+		// bill a workspace twice for one transcript.
+		await context.record({
+			nodeId,
+			name: node.label || tool.name,
+			ok: result.ok,
+			payload: { arguments: argumentsJson },
+			output: { ...result.metadata, preview: result.content.slice(0, 500) },
+		})
+	}
+
+	return {
+		// The tool's own text, fencing and all. Every one of these tools wraps what
+		// it read in a line saying it is an observation and not an instruction, and
+		// unwrapping it on the way into a flow's values would delete exactly the
+		// sentence that keeps a transcribed voice note from being read as one
+		// (`.claude/rules/security.md`).
+		text: result.content,
+		values: { ok: String(result.ok), ...carriedValues(result.metadata) },
+	}
+}
+
+const httpNode: NodeImplementation = {
+	async *execute(context, node, nodeId): AsyncGenerator<NodeEvent, NodeOutput> {
+		const params = httpNodeParams.parse(node.params)
+		const body = resolveTemplate(params.body, scope(context))
+
+		return yield* runToolNode(context, node, nodeId, "http_request", {
+			url: resolveTemplate(params.url, scope(context)),
+			method: params.method,
+			...(body ? { body } : {}),
+		})
+	},
+}
+
+const ocrNode: NodeImplementation = {
+	async *execute(context, node, nodeId): AsyncGenerator<NodeEvent, NodeOutput> {
+		const params = ocrNodeParams.parse(node.params)
+
+		return yield* runToolNode(context, node, nodeId, "image_ocr", {
+			attachmentId: resolveTemplate(params.attachmentId, scope(context)),
+		})
+	},
+}
+
+const visionNode: NodeImplementation = {
+	async *execute(context, node, nodeId): AsyncGenerator<NodeEvent, NodeOutput> {
+		const params = visionNodeParams.parse(node.params)
+
+		return yield* runToolNode(context, node, nodeId, "image_vision", {
+			attachmentId: resolveTemplate(params.attachmentId, scope(context)),
+			question: resolveTemplate(params.question, scope(context)),
+		})
+	},
+}
+
+const sttNode: NodeImplementation = {
+	async *execute(context, node, nodeId): AsyncGenerator<NodeEvent, NodeOutput> {
+		const params = sttNodeParams.parse(node.params)
+
+		return yield* runToolNode(context, node, nodeId, "speech_transcribe", {
+			attachmentId: resolveTemplate(params.attachmentId, scope(context)),
+			...(params.language ? { language: params.language } : {}),
+		})
+	},
+}
+
+const ttsNode: NodeImplementation = {
+	async *execute(context, node, nodeId): AsyncGenerator<NodeEvent, NodeOutput> {
+		const params = ttsNodeParams.parse(node.params)
+
+		// The recording comes back as an attachment id, not audio, so the id is what
+		// the next step reads: `{{speak.attachmentId}}` (`speech-synthesize.tool.ts`).
+		return yield* runToolNode(context, node, nodeId, "speech_synthesize", {
+			text: resolveTemplate(params.text, scope(context)),
+			...(params.voice ? { voice: params.voice } : {}),
+		})
+	},
+}
+
+const excelNode: NodeImplementation = {
+	async *execute(context, node, nodeId): AsyncGenerator<NodeEvent, NodeOutput> {
+		const params = excelNodeParams.parse(node.params)
+
+		if (params.operation === "read") {
+			return yield* runToolNode(context, node, nodeId, "excel_read", {
+				attachmentId: resolveTemplate(params.attachmentId, scope(context)),
+				...(params.sheet ? { sheet: params.sheet } : {}),
+			})
+		}
+
+		return yield* runToolNode(context, node, nodeId, "excel_write", {
+			...(params.fileName ? { fileName: params.fileName } : {}),
+			sheets: params.sheets.map((sheet) => ({
+				name: sheet.name,
+				// Per cell, so a row can be built out of what earlier nodes produced —
+				// which is the whole reason a flow writes a spreadsheet at all.
+				rows: sheet.rows.map((row) => row.map((cell) => resolveTemplate(cell, scope(context)))),
+			})),
+		})
+	},
+}
+
+const browserNode: NodeImplementation = {
+	async *execute(context, node, nodeId): AsyncGenerator<NodeEvent, NodeOutput> {
+		const params = browserNodeParams.parse(node.params)
+
+		return yield* runToolNode(context, node, nodeId, "browser_read", {
+			url: resolveTemplate(params.url, scope(context)),
+			...(params.selectors ? { selectors: params.selectors } : {}),
+		})
+	},
+}
+
+/**
+ * Walk a list, running one node per item.
+ *
+ * ADR-031 deferred this because iteration seemed to need a second execution
+ * model — a sub-graph with its own frontier and its own variable scope. It does
+ * not, as long as the body is **one node**: the loop asks the engine to run that
+ * node once per item and hands the frontier back a `next` that leaves the body
+ * out of it, so the frontier never sees the body at all and cannot double-run
+ * it. A body of several nodes would need the sub-graph, and is not this.
+ *
+ * **It cannot run forever.** Three bounds, and the run's budget is the one that
+ * decides: `maxIterations` is what the flow author asked for,
+ * `MAX_LOOP_ITERATIONS` is the most anyone may ask for, and what is left of
+ * `MAX_NODE_EXECUTIONS` is what the run can still afford — every iteration
+ * spends from the same budget every other node spends from, counted by the
+ * engine rather than here. A list longer than the smallest of the three is
+ * truncated, and the output says so rather than quietly answering from part of
+ * it.
+ *
+ * **A loop is one node, so it is one checkpoint.** A run interrupted half way
+ * through a list resumes at the top of the loop and pays for the finished
+ * iterations again — the node boundary is where the engine can restart, and
+ * there is no half-finished node to resume into (`../checkpoint.ts`). With a
+ * ceiling of 25 iterations that is a bounded cost, and an iteration index in the
+ * checkpoint would be a second thing that has to agree with `completed` about
+ * what has already happened.
+ */
+const loopNode: NodeImplementation = {
+	async *execute(context, node): AsyncGenerator<NodeEvent, NodeOutput> {
+		const params = loopNodeParams.parse(node.params)
+		const { runBody, remainingExecutions } = context
+		if (!runBody || !remainingExecutions) {
+			throw new ValidationError("A loop step only runs as part of a flow.")
+		}
+
+		const items = parseLoopItems(resolveTemplate(params.items, scope(context)), params.format)
+		const planned = plannedIterations({
+			items: items.length,
+			maxIterations: params.maxIterations,
+			remaining: remainingExecutions(),
+		})
+
+		const outputs: string[] = []
+		try {
+			for (let index = 0; index < planned; index += 1) {
+				// The body reads its item out of the run's own value scope, so it is an
+				// ordinary node that knows nothing about being looped over. Mutated in
+				// place rather than replaced: the engine holds a reference to this
+				// object, and a fresh one would not be the one it snapshots.
+				context.values[LOOP_SCOPE] = { item: items[index]!, index: String(index) }
+				// A body that branches has nowhere to branch to — the frontier is not
+				// running it — so its `next` is ignored, and only its text is collected.
+				const result = yield* runBody(params.body)
+				outputs.push(result.text)
+			}
+		} finally {
+			// The scope belongs to the loop, not to the run. Left behind,
+			// `{{loop.item}}` would keep resolving to the last item in every node
+			// after this one.
+			delete context.values[LOOP_SCOPE]
+		}
+
+		const truncated = planned < items.length
+		const text = [
+			outputs.join("\n\n"),
+			truncated
+				? `[The list had ${items.length} items and this flow ran the first ${planned}.]`
+				: "",
+		]
+			.filter(Boolean)
+			.join("\n\n")
+
+		return {
+			text,
+			values: {
+				count: String(planned),
+				items: String(items.length),
+				truncated: String(truncated),
+			},
+			// The body is this node's to run and nobody else's. Leaving it in what the
+			// frontier reaches would run it once more after the loop, on whatever
+			// `{{loop.item}}` no longer resolves to.
+			next: node.downstream.filter((id) => id !== params.body),
+		}
+	},
+}
+
 export const NODE_IMPLEMENTATIONS = {
 	begin: beginNode,
 	llm: llmNode,
@@ -486,4 +786,12 @@ export const NODE_IMPLEMENTATIONS = {
 	switch: switchNode,
 	user_input: userInputNode,
 	message: messageNode,
+	http: httpNode,
+	ocr: ocrNode,
+	vision: visionNode,
+	stt: sttNode,
+	tts: ttsNode,
+	excel: excelNode,
+	browser: browserNode,
+	loop: loopNode,
 } as const satisfies Record<string, NodeImplementation>

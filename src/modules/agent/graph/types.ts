@@ -1,5 +1,7 @@
 import { z } from "zod"
 
+import { LOOP_SCOPE, loopNodeParams } from "./node-params"
+
 /**
  * The graph an agent version may carry instead of a single prompt.
  *
@@ -15,6 +17,19 @@ import { z } from "zod"
  *
  * A version with no graph is a Phase 1 agent — one prompt, one answer — and that
  * stays true forever, so nothing built earlier breaks when this arrives.
+ *
+ * Three node types RAGFlow has and this deliberately does not:
+ *
+ * - **`input` / `output`.** `begin` is already the one entry point and `message`
+ *   is already how a flow says something. A second name for each would be two
+ *   things the canvas can get wrong about one concept, and a graph where the
+ *   answer came from whichever of them ran last.
+ * - **`condition`.** `switch` decides deterministically and `categorize` asks
+ *   the model; between them there is no third way to take a branch, and a node
+ *   that overlapped both would only make it unclear which one a flow was using.
+ *
+ * If one of those looks necessary later, what is actually missing is a
+ * capability — not a second name for one of these.
  */
 export const NODE_TYPES = [
 	"begin",
@@ -25,6 +40,18 @@ export const NODE_TYPES = [
 	"switch",
 	"user_input",
 	"message",
+	// Seven wrappers over tools that already exist (`../tools/`). A node's job is
+	// to decide what the tool is given and who is charged; the capability itself
+	// has exactly one implementation, which is the whole reason the tools were
+	// built first.
+	"http",
+	"ocr",
+	"vision",
+	"stt",
+	"tts",
+	"excel",
+	"browser",
+	"loop",
 ] as const
 
 export type NodeType = (typeof NODE_TYPES)[number]
@@ -68,6 +95,14 @@ export type ErrorPolicy = z.infer<typeof errorPolicySchema>
 
 /** The id of the one entry point. Fixed rather than searched for. */
 export const BEGIN_NODE = "begin"
+
+/**
+ * Names a node may not take, because a template already resolves them to
+ * something else: `{{sys.input}}` is the run's input and `{{loop.item}}` is the
+ * item a loop's body is on. A node called either would be shadowed by a scope
+ * and silently unreachable from every template in the flow.
+ */
+const RESERVED_IDS = ["sys", LOOP_SCOPE]
 
 /**
  * What a node leaves behind for the ones after it.
@@ -126,6 +161,14 @@ export function validateGraph(graph: AgentGraph): string[] {
 		}
 	}
 
+	for (const id of ids) {
+		if (RESERVED_IDS.includes(id)) {
+			problems.push(`"${id}" is a reserved name — a template already resolves it.`)
+		}
+	}
+
+	problems.push(...loopProblems(graph))
+
 	// A node nothing reaches never runs. That is almost always an edge someone
 	// meant to draw, and silently ignoring it makes a flow that looks right and
 	// is not.
@@ -138,10 +181,71 @@ export function validateGraph(graph: AgentGraph): string[] {
 }
 
 /**
+ * The one place a node's params name another node, which makes `body` an edge —
+ * and edges are what this function checks.
+ *
+ * The rules exist because the engine runs a loop's body *itself*, once per item,
+ * and removes it from what the frontier picks up next. Everything below is a way
+ * that arrangement can be drawn wrong: a body the frontier would also reach runs
+ * twice and is charged twice, a body with its own downstream has a branch that
+ * silently never runs, a body that pauses for a person cannot be resumed
+ * part-way through a list, and a loop inside a loop multiplies a budget nobody
+ * looked at. Each is caught while somebody is looking at the canvas rather than
+ * mid-run, which is what publish-time validation is for.
+ */
+function loopProblems(graph: AgentGraph): string[] {
+	const problems: string[] = []
+
+	for (const [id, node] of Object.entries(graph.nodes)) {
+		if (node.type !== "loop") continue
+
+		const params = loopNodeParams.safeParse(node.params)
+		if (!params.success) {
+			problems.push(`"${id}" is a loop, so it needs a body node to run for each item.`)
+			continue
+		}
+
+		const bodyId = params.data.body
+		const body = graph.nodes[bodyId]
+		if (!body) {
+			problems.push(`"${id}" loops over "${bodyId}", which is not in the graph.`)
+			continue
+		}
+		if (bodyId === id) {
+			problems.push(`"${id}" cannot be its own loop body.`)
+			continue
+		}
+
+		if (!node.downstream.includes(bodyId)) {
+			problems.push(`"${id}" loops over "${bodyId}" but does not lead to it.`)
+		}
+		if (body.upstream.length !== 1 || body.upstream[0] !== id) {
+			problems.push(`"${id}" must be the only thing leading to its loop body "${bodyId}".`)
+		}
+		if (body.downstream.length > 0) {
+			problems.push(
+				`Nothing runs after the loop body "${bodyId}" — put what comes next after "${id}" instead.`,
+			)
+		}
+		if (body.type === "loop") {
+			problems.push(`"${bodyId}" cannot be a loop body: a loop inside a loop is not supported.`)
+		}
+		if (body.type === "user_input") {
+			problems.push(
+				`"${bodyId}" cannot be a loop body: a run that stops to ask a person cannot be resumed part-way through a list.`,
+			)
+		}
+	}
+
+	return problems
+}
+
+/**
  * Resolves `{{...}}` references in a parameter.
  *
  * `{{sys.input}}` is what the run was asked to do; `{{nodeId.text}}` is what a
- * node produced. An unresolved reference becomes an empty string rather than
+ * node produced; `{{loop.item}}` and `{{loop.index}}` exist only while a loop's
+ * body is running. An unresolved reference becomes an empty string rather than
  * throwing: a half-configured node should produce a poor answer someone can see
  * and fix, not a failed run with a stack trace.
  */

@@ -1,4 +1,4 @@
-import { isAppError } from "../../../shared/errors"
+import { isAppError, ValidationError } from "../../../shared/errors"
 import { logger } from "../../../shared/logger"
 import { MAX_NODE_EXECUTIONS, nextRunnable } from "../checkpoint"
 import type { GraphState } from "../checkpoint"
@@ -72,6 +72,13 @@ export interface RunGraphOptions {
  * not; there is no half-finished node to resume into. So the engine yields a
  * `checkpoint` after each one and the caller writes it, which is what makes a
  * crash cost one node rather than the run.
+ *
+ * **A loop runs its body outside the frontier.** ADR-031 deferred iteration for
+ * wanting a second execution model; it needs one only if a body may be several
+ * nodes. A body of exactly one node is run by `runBody` below — through the same
+ * `execute`, counting against the same budget — and the loop hands back a `next`
+ * that leaves the body out, so the frontier never reaches it and cannot run it
+ * again after the loop.
  */
 export async function* runGraph(
 	options: RunGraphOptions,
@@ -104,6 +111,45 @@ export async function* runGraph(
 	// answers already in `values` and passes straight through — which is what
 	// keeps resuming a re-run of the same graph rather than a second code path.
 	if (options.state?.pending) completed.delete(options.state.pending)
+
+	/**
+	 * What a `loop` node needs and cannot have: the graph, and the budget.
+	 *
+	 * Installed here, the way `values` is, because the caller builds the context
+	 * without either. The budget is the point — a body execution is a node
+	 * execution and counts as one, so a loop cannot buy itself extra steps by
+	 * running them from inside a node, and the count survives a resume because it
+	 * is the same `executions` every other node increments.
+	 */
+	context.remainingExecutions = () => Math.max(MAX_NODE_EXECUTIONS - executions, 0)
+	context.runBody = async function* runBody(bodyNodeId) {
+		const body = graph.nodes[bodyNodeId]
+		if (!body) {
+			throw new ValidationError(`This flow loops over "${bodyNodeId}", which is not in it.`)
+		}
+		// Both are refused at publish time (`validateGraph`). Repeated here because
+		// this is the call that would actually spend the budget, and a graph stored
+		// before those checks existed still reaches it.
+		if (body.type === "loop") {
+			throw new ValidationError("A loop's body cannot itself be a loop.")
+		}
+		if (body.type === "user_input") {
+			throw new ValidationError("A loop's body cannot stop to ask a person.")
+		}
+		if (executions >= MAX_NODE_EXECUTIONS) {
+			throw new ValidationError(
+				`This flow reached its limit of ${MAX_NODE_EXECUTIONS} steps part-way through a loop.`,
+			)
+		}
+
+		executions += 1
+		// The body is run by the same `execute` every other node goes through, so
+		// its retry policy and its failures behave the same inside a loop as out of
+		// one. What it does *not* do is join the frontier: it is never added to
+		// `reached` or `completed`, and the loop node hands back a `next` that
+		// leaves it out, so the engine can never run it a second time.
+		return yield* execute(context, graph, bodyNodeId)
+	}
 
 	while (executions < MAX_NODE_EXECUTIONS) {
 		const nodeId = nextRunnable(graph, reached, completed)
@@ -197,7 +243,7 @@ async function* execute(
 	context: NodeContext,
 	graph: AgentGraph,
 	nodeId: string,
-): AsyncGenerator<GraphEvent, NodeOutput> {
+): AsyncGenerator<NodeEvent, NodeOutput> {
 	const node = graph.nodes[nodeId]!
 	const implementation = NODE_IMPLEMENTATIONS[node.type]
 	const attempts = (node.onError?.retries ?? 0) + 1
@@ -208,7 +254,7 @@ async function* execute(
 			const iterator = implementation.execute(context, node, nodeId)
 			let step = await iterator.next()
 			while (!step.done) {
-				yield forward(step.value)
+				yield step.value
 				step = await iterator.next()
 			}
 			return step.value
@@ -224,6 +270,3 @@ async function* execute(
 	throw lastError
 }
 
-function forward(event: NodeEvent): GraphEvent {
-	return event
-}
