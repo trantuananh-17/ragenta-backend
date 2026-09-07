@@ -259,15 +259,41 @@ export const providerService = {
 
 		try {
 			const result = await descriptor.client.check(resolved)
+
+			/*
+				A key that authenticates is not a catalogue that runs.
+
+				`check` proves the credential; it says nothing about whether the model
+				ids this deployment offers still exist behind it. Providers retire
+				models on their own schedule — Google withdrew `gemini-2.5-flash` from
+				new keys months before its published shutdown date — and the failure
+				surfaces as a 404 on a customer's message, long after an administrator
+				saw this screen say the key was fine. When the provider lists what the
+				key can see, the two are compared here so the screen says it instead.
+			*/
+			const visible = new Set(result.models ?? [])
+			const missing =
+				visible.size === 0
+					? []
+					: (await listCatalogue())
+							.filter((entry) => entry.provider === provider && entry.enabled)
+							.map((entry) => entry.model)
+							.filter((model) => !visible.has(model))
+
+			const detail =
+				missing.length === 0
+					? result.detail
+					: `${result.detail} ${missing.length} model${missing.length === 1 ? "" : "s"} in this deployment's catalogue ${missing.length === 1 ? "is" : "are"} not visible to this key and will fail when picked: ${missing.join(", ")}.`
+
 			await providerRepository.recordCheck(provider, { ok: true, error: null })
 			await auditService.record({
 				action: "provider.credential.checked",
 				actorId,
 				targetType: "provider_credential",
 				targetId: provider,
-				metadata: { provider, ok: true },
+				metadata: { provider, ok: true, missing },
 			})
-			return { ...result, ok: true, checkedAt: new Date() }
+			return { ...result, detail, missing, ok: true, checkedAt: new Date() }
 		} catch (error) {
 			const message =
 				error instanceof Error ? error.message : "The provider could not be reached."
