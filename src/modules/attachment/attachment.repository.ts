@@ -33,6 +33,30 @@ export const attachmentRepository = {
 	},
 
 	/**
+	 * Extraction results and the status around them. Workspace-scoped like every
+	 * other statement here, so a job that lost track of which tenant it is in
+	 * cannot write across one.
+	 */
+	async update(
+		workspaceId: string,
+		attachmentId: string,
+		patch: Partial<NewMessageAttachment>,
+		executor: DbExecutor = db,
+	) {
+		const rows = await executor
+			.update(messageAttachment)
+			.set(patch)
+			.where(
+				and(
+					eq(messageAttachment.organizationId, workspaceId),
+					eq(messageAttachment.id, attachmentId),
+				),
+			)
+			.returning()
+		return rows[0]
+	},
+
+	/**
 	 * `message_id is null` is part of the statement rather than a check the caller
 	 * makes first: a send can bind the row between reading it and deleting it, and
 	 * the delete has to lose that race instead of leaving the message pointing at

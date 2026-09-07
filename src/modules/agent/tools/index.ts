@@ -9,6 +9,8 @@ import { imageVisionTool } from "./image-vision.tool"
 import { createKnowledgeSearchTool } from "./knowledge-search.tool"
 import { createSaveDocumentTool } from "./save-document.tool"
 import { sendEmailTool } from "./send-email.tool"
+import { speechSynthesizeTool } from "./speech-synthesize.tool"
+import { speechTranscribeTool } from "./speech-transcribe.tool"
 import { webSearchTool } from "./web-search.tool"
 import type { AgentTool } from "./types"
 
@@ -31,6 +33,8 @@ export const TOOL_IDS = [
 	"save_document",
 	"image_ocr",
 	"image_vision",
+	"speech_transcribe",
+	"speech_synthesize",
 ] as const
 export type ToolId = (typeof TOOL_IDS)[number]
 
@@ -112,6 +116,20 @@ export const TOOL_CATALOGUE: Record<
 		writes: false,
 		requires: null,
 	},
+	speech_transcribe: {
+		title: "Transcribe a recording",
+		description:
+			"Turn an audio attachment into text — a voice note, a recorded call, a meeting clip. Needs speech-to-text configured for the deployment, and re-uses a transcript the recording already has.",
+		writes: false,
+		requires: null,
+	},
+	speech_synthesize: {
+		title: "Speak text aloud",
+		description:
+			"Generate speech from text and save it as a new audio attachment, returning its id. Needs text-to-speech configured for the deployment.",
+		writes: false,
+		requires: null,
+	},
 }
 
 /** Whether a tool changes something outside Ragenta. */
@@ -147,6 +165,11 @@ export function toolsFor(
 		// leak (`image-attachment.ts`).
 		if (id === "image_ocr") tools.push(imageOcrTool)
 		if (id === "image_vision") tools.push(imageVisionTool)
+		// Same argument as the image tools, and the same protection: the model
+		// names an attachment, and the speech service resolves it workspace-scoped
+		// (`speech-transcribe.tool.ts`).
+		if (id === "speech_transcribe") tools.push(speechTranscribeTool)
+		if (id === "speech_synthesize") tools.push(speechSynthesizeTool)
 	}
 	return tools
 }

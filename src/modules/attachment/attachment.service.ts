@@ -13,16 +13,42 @@ import {
 import { StorageUnavailableError } from "../../storage/objects"
 import { toAttachmentResponse } from "./attachment.dto"
 import { attachmentRepository } from "./attachment.repository"
-import { validateImageUpload } from "./validate"
+import { sniffImageMimeType, validateAudioUpload, validateImageUpload } from "./validate"
 
 const log = logger.child({ module: "attachment" })
 
-export interface UploadedImage {
+export interface UploadedFile {
 	/** Display only. It never reaches a path — the key comes from the generated id. */
 	name: string
 	/** What the caller claimed. Kept for the mismatch log and for nothing else. */
 	declaredMimeType: string
 	bytes: Buffer
+}
+
+/** What the bytes turned out to be, and the per-kind columns that follow from it. */
+interface ValidatedUpload {
+	kind: "image" | "audio"
+	mimeType: string
+	sizeBytes: number
+	width: number | null
+	height: number | null
+	durationMs: number | null
+}
+
+/**
+ * One upload path for every kind, because there is one table and one binding
+ * path (ADR-037). The image sniff runs first and settles the RIFF container both
+ * families share — a WAV cannot pass it, because `sniffImageMimeType` requires
+ * the WEBP form word as well as the RIFF prefix.
+ */
+function validateUpload(bytes: Buffer): ValidatedUpload {
+	if (sniffImageMimeType(bytes)) {
+		const image = validateImageUpload(bytes)
+		return { kind: "image", ...image, durationMs: null }
+	}
+
+	const audio = validateAudioUpload(bytes)
+	return { kind: "audio", ...audio, width: null, height: null }
 }
 
 /**
@@ -31,46 +57,54 @@ export interface UploadedImage {
  * which re-checks workspace ownership then. An unbound row is not permission to
  * attach it to anything.
  *
- * Deliberately not audited: this is one row per image pasted into a composer,
+ * Deliberately not audited: this is one row per file pasted into a composer,
  * and `.claude/rules/security.md` reserves the trail for actions that move
  * money, permissions or people.
  */
 export const attachmentService = {
-	async uploadImage(workspaceId: string, file: UploadedImage, actorId: string) {
+	/**
+	 * `actorId` is nullable because an agent run may have no human actor — an
+	 * API-key or scheduled run. `message_attachment.user_id` is a nullable FK,
+	 * so null is the correct value there; an empty string would violate it.
+	 */
+	async upload(workspaceId: string, file: UploadedFile, actorId: string | null) {
 		if (!isStorageConfigured()) throw new StorageUnavailableError()
 
-		const image = validateImageUpload(file.bytes)
-		if (file.declaredMimeType && file.declaredMimeType !== image.mimeType) {
+		const upload = validateUpload(file.bytes)
+		if (file.declaredMimeType && file.declaredMimeType !== upload.mimeType) {
 			// Not refused on its own: browsers get this wrong for renamed files often
 			// enough. It is logged because a run of them is what a probe looks like.
 			log.warn("attachment.mime_mismatch", {
 				workspaceId,
 				declared: file.declaredMimeType,
-				sniffed: image.mimeType,
+				sniffed: upload.mimeType,
 			})
 		}
 
 		const id = newId()
 		const key = attachmentKey(workspaceId, id)
-		await putObject(key, file.bytes, image.mimeType)
+		await putObject(key, file.bytes, upload.mimeType)
 
 		const row = await attachmentRepository.insert({
 			id,
 			organizationId: workspaceId,
 			userId: actorId,
-			kind: "image",
+			kind: upload.kind,
 			storageKey: key,
 			fileName: file.name.slice(0, 300),
-			mimeType: image.mimeType,
-			sizeBytes: image.sizeBytes,
-			width: image.width,
-			height: image.height,
+			mimeType: upload.mimeType,
+			sizeBytes: upload.sizeBytes,
+			width: upload.width,
+			height: upload.height,
+			durationMs: upload.durationMs,
+			// Ready even for audio: the object is stored and playable. Transcription
+			// is a separate, billed request, and it is what moves this to processing.
 			status: "ready",
 		})
 		if (!row) {
 			throw new AppError(
 				"ATTACHMENT_NOT_STORED",
-				"The image was uploaded but could not be recorded.",
+				"The file was uploaded but could not be recorded.",
 				500,
 			)
 		}

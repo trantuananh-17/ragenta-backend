@@ -1,9 +1,11 @@
 import { Buffer } from "node:buffer"
 
+import { MAX_AUDIO_BYTES } from "../../ai/speech/types"
+import type { AudioMimeType } from "../../ai/speech/types"
 import { ValidationError } from "../../shared/errors"
 
 /**
- * What an uploaded image is allowed to be, decided from its own bytes.
+ * What an uploaded file is allowed to be, decided from its own bytes.
  *
  * The declared content type is deliberately not an input to any function here.
  * It is whatever the caller put in the multipart part, and the type we keep is
@@ -184,4 +186,81 @@ export function validateImageUpload(bytes: Buffer): ValidatedImage {
 	}
 
 	return { mimeType, sizeBytes: bytes.length, width, height }
+}
+
+/**
+ * What an uploaded recording is allowed to be, decided the same way: from the
+ * first bytes, never from the declared type. A browser's MediaRecorder labels
+ * its output for the codec it negotiated rather than the container it wrote, so
+ * the declared type here is wrong often enough to be useless even when nobody
+ * is lying.
+ */
+
+const OGG_SIGNATURE = [0x4f, 0x67, 0x67, 0x53]
+const WAVE_FORM = [0x57, 0x41, 0x56, 0x45]
+const ID3_SIGNATURE = [0x49, 0x44, 0x33]
+const FLAC_SIGNATURE = [0x66, 0x4c, 0x61, 0x43]
+const EBML_SIGNATURE = [0x1a, 0x45, 0xdf, 0xa3]
+const FTYP_BOX = [0x66, 0x74, 0x79, 0x70]
+
+/**
+ * An MPEG audio frame header: eleven set bits, so the second byte is 0xEx or
+ * 0xFx. An MP3 without an ID3 tag starts on one, and a JPEG cannot be mistaken
+ * for it — its second byte is 0xD8, outside that range.
+ */
+function isMpegFrameSync(bytes: Buffer): boolean {
+	const first = bytes[0]
+	const second = bytes[1]
+	if (first === undefined || second === undefined) return false
+	return first === 0xff && (second & 0xe0) === 0xe0
+}
+
+export function sniffAudioMimeType(bytes: Buffer): AudioMimeType | undefined {
+	if (matches(bytes, 0, OGG_SIGNATURE)) return "audio/ogg"
+	// RIFF is WAV, WebP and AVI alike, so the form in the fourth word decides —
+	// the mirror of the WebP check above. Getting this wrong either way stores a
+	// recording as a picture or refuses a perfectly good one.
+	if (matches(bytes, 0, RIFF_SIGNATURE) && matches(bytes, 8, WAVE_FORM)) return "audio/wav"
+	if (matches(bytes, 0, ID3_SIGNATURE) || isMpegFrameSync(bytes)) return "audio/mpeg"
+	if (matches(bytes, 0, FLAC_SIGNATURE)) return "audio/flac"
+	// EBML, the Matroska header WebM inherits. This is what Chrome's MediaRecorder
+	// produces, so it is the common case rather than an exotic one.
+	if (matches(bytes, 0, EBML_SIGNATURE)) return "audio/webm"
+	// ISO base media: the `ftyp` box, which is preceded by its own four-byte
+	// length, so it sits at 4 rather than at 0. Safari's MediaRecorder writes it.
+	if (matches(bytes, 4, FTYP_BOX)) return "audio/mp4"
+	return undefined
+}
+
+export interface ValidatedAudio {
+	/** Sniffed, never declared. This is what gets stored and sent to transcription. */
+	mimeType: AudioMimeType
+	sizeBytes: number
+	/**
+	 * Always null. Duration is not read from the container here: each of these
+	 * formats hides it somewhere different — WebM needs the EBML segment info,
+	 * MP3 has no duration field at all and is estimated by scanning every frame,
+	 * MP4 needs the moov atom that a streamed recording puts at the *end* — and a
+	 * wrong number here would be a wrong bill. Transcription reports `durationSec`
+	 * authoritatively, and that is what the row and the charge are set from.
+	 */
+	durationMs: null
+}
+
+export function validateAudioUpload(bytes: Buffer): ValidatedAudio {
+	if (bytes.length === 0) throw new ValidationError("The recording is empty.")
+	if (bytes.length > MAX_AUDIO_BYTES) {
+		throw new ValidationError(
+			`The recording is larger than the ${Math.floor(MAX_AUDIO_BYTES / 1024 / 1024)} MB limit.`,
+		)
+	}
+
+	const mimeType = sniffAudioMimeType(bytes)
+	if (!mimeType) {
+		throw new ValidationError(
+			"Attach a WebM, MP4, OGG, MP3, WAV or FLAC recording. The file's contents are none of those, whatever it is named.",
+		)
+	}
+
+	return { mimeType, sizeBytes: bytes.length, durationMs: null }
 }

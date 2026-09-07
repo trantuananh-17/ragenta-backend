@@ -8,8 +8,12 @@ import { attachmentService } from "./attachment.service"
 export const attachmentController = {
 	/**
 	 * `multipart/form-data`, for the same reason a document upload is: base64 in a
-	 * JSON body inflates the payload by a third and pushes the whole image through
+	 * JSON body inflates the payload by a third and pushes the whole file through
 	 * a JSON parser.
+	 *
+	 * One endpoint for images and recordings alike: the kind is decided from the
+	 * bytes, so there is nothing for a caller to declare and nothing for it to get
+	 * wrong.
 	 */
 	async upload(c: AppContext) {
 		const user = requireUser(c)
@@ -18,11 +22,11 @@ export const attachmentController = {
 		const body = await c.req.parseBody()
 		const file = body.file
 		if (!(file instanceof File)) {
-			throw new ValidationError("Attach the image as a `file` form field.")
+			throw new ValidationError("Attach the file as a `file` form field.")
 		}
 
 		return c.json(
-			await attachmentService.uploadImage(
+			await attachmentService.upload(
 				membership.organizationId,
 				{
 					name: file.name,

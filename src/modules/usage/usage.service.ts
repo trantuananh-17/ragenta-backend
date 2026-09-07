@@ -7,13 +7,14 @@ import { page } from "../../shared/pagination"
 import { billingService } from "../billing/billing.service"
 import type { CreditSource } from "../billing/billing.service"
 import { planLimits } from "../billing/plans"
-import { priceUsage } from "./pricing"
+import { priceSpeechUsage, priceUsage } from "./pricing"
+import type { SpeechUnits } from "./pricing"
 import { usageRepository } from "./usage.repository"
 import type { UsageFilter } from "./usage.repository"
 
 const log = logger.child({ module: "usage" })
 
-export type UsageOperation = "chat" | "embedding" | "rerank" | "ingestion" | "agent"
+export type UsageOperation = "chat" | "embedding" | "rerank" | "ingestion" | "agent" | "speech"
 
 /** Which credit source an operation is charged against. */
 const OPERATION_SOURCE: Record<UsageOperation, CreditSource> = {
@@ -22,6 +23,7 @@ const OPERATION_SOURCE: Record<UsageOperation, CreditSource> = {
 	rerank: "chat",
 	ingestion: "ingestion",
 	agent: "agent",
+	speech: "speech",
 }
 
 export interface RecordUsageInput {
@@ -40,6 +42,13 @@ export interface RecordUsageInput {
 	 */
 	reference: string
 	metadata?: Record<string, unknown>
+	/**
+	 * Set for `speech` and for nothing else. Its presence is what routes the
+	 * charge to `priceSpeechUsage` — seconds and characters are not tokens, and
+	 * `priceUsage` would silently bill them at the premium fallback token rate it
+	 * uses for models it does not recognise.
+	 */
+	speechUnits?: SpeechUnits
 }
 
 export const usageService = {
@@ -56,11 +65,9 @@ export const usageService = {
 	 * refusing up front.
 	 */
 	async recordAndCharge(input: RecordUsageInput) {
-		const { credits, pricingVersion } = await priceUsage(
-			input.provider,
-			input.model,
-			input,
-		)
+		const { credits, pricingVersion } = input.speechUnits
+			? priceSpeechUsage(input.speechUnits)
+			: await priceUsage(input.provider, input.model, input)
 
 		return db.transaction(async (tx) => {
 			// A rounding-to-zero charge still records the usage: the tokens were

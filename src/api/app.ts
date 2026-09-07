@@ -18,6 +18,7 @@ import { webhookRoutes } from "../modules/billing/webhook.routes"
 import { modelRoutes } from "../modules/model/model.routes"
 import { projectRoutes } from "../modules/project/project.routes"
 import { promoRoutes } from "../modules/promo/promo.routes"
+import { speechRoutes } from "../modules/speech/speech.routes"
 import { usageRoutes } from "../modules/usage/usage.routes"
 import { workspaceRoutes } from "../modules/workspace/workspace.routes"
 import { errorHandler } from "./middleware/error-handler"
@@ -108,6 +109,7 @@ export function createApp() {
 	app.route("/v1/workspaces", knowledgeRoutes)
 	app.route("/v1/workspaces", chatRoutes)
 	app.route("/v1/workspaces", attachmentRoutes)
+	app.route("/v1/workspaces", speechRoutes)
 	app.route("/v1/workspaces", agentRoutes)
 	app.route("/v1/admin", adminRoutes)
 

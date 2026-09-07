@@ -93,7 +93,7 @@ export const creditTransaction = pgTable(
 		 * twice.
 		 */
 		reference: text("reference").notNull(),
-		/** What consumed the credit: chat | embedding | ingestion | agent | admin. */
+		/** What consumed the credit: chat | embedding | ingestion | agent | speech | admin. */
 		source: text("source"),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 	},

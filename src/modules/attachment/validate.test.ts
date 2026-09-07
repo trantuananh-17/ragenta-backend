@@ -1,12 +1,15 @@
 import { Buffer } from "node:buffer"
 import { describe, expect, it } from "vitest"
 
+import { MAX_AUDIO_BYTES } from "../../ai/speech/types"
 import { ValidationError } from "../../shared/errors"
 import {
 	MAX_IMAGE_BYTES,
 	MAX_IMAGE_EDGE_PIXELS,
 	readImageDimensions,
+	sniffAudioMimeType,
 	sniffImageMimeType,
+	validateAudioUpload,
 	validateImageUpload,
 } from "./validate"
 
@@ -154,5 +157,111 @@ describe("readImageDimensions", () => {
 
 	it("does not guess a size for the containers it cannot measure", () => {
 		expect(readImageDimensions(WEBP, "image/webp")).toEqual({ width: null, height: null })
+	})
+})
+
+/**
+ * Audio, where the signatures matter more than they do for images: the two
+ * formats browsers actually produce — Chrome's WebM and Safari's MP4 — are both
+ * containers whose declared type says nothing about what was written, and WAV
+ * shares its first four bytes with WebP.
+ */
+
+/** `RIFF`, a size, then the form word that decides which RIFF this is. */
+function riff(form: string): Buffer {
+	const bytes = Buffer.alloc(16)
+	bytes.write("RIFF", 0, "ascii")
+	bytes.writeUInt32LE(8, 4)
+	bytes.write(form, 8, "ascii")
+	return bytes
+}
+
+/** A four-byte box length, then the `ftyp` box and its brand. */
+function mp4(): Buffer {
+	const bytes = Buffer.alloc(16)
+	bytes.writeUInt32BE(16, 0)
+	bytes.write("ftypisom", 4, "ascii")
+	return bytes
+}
+
+describe("sniffAudioMimeType", () => {
+	it("detects an Ogg container", () => {
+		expect(sniffAudioMimeType(Buffer.from("OggS\x00\x02\x00\x00", "binary"))).toBe("audio/ogg")
+	})
+
+	it("detects WAV only when the RIFF form is WAVE", () => {
+		expect(sniffAudioMimeType(riff("WAVE"))).toBe("audio/wav")
+		expect(sniffAudioMimeType(riff("WEBP"))).toBeUndefined()
+	})
+
+	it("does not let a WAV pass as a WebP image", () => {
+		// Both start `RIFF`, so a sniffer that stopped at the prefix would store a
+		// voice note as a picture and a picture as a voice note.
+		expect(sniffImageMimeType(riff("WAVE"))).toBeUndefined()
+		expect(sniffImageMimeType(riff("WEBP"))).toBe("image/webp")
+		expect(sniffAudioMimeType(riff("WEBP"))).toBeUndefined()
+	})
+
+	it("detects an MP3 with an ID3 tag", () => {
+		expect(sniffAudioMimeType(Buffer.from("ID3\x03\x00\x00\x00\x00", "binary"))).toBe(
+			"audio/mpeg",
+		)
+	})
+
+	it("detects a bare MP3 frame sync", () => {
+		expect(sniffAudioMimeType(Buffer.from([0xff, 0xfb, 0x90, 0x00]))).toBe("audio/mpeg")
+		expect(sniffAudioMimeType(Buffer.from([0xff, 0xe3, 0x18, 0xc4]))).toBe("audio/mpeg")
+	})
+
+	it("does not read a JPEG's 0xFF as a frame sync", () => {
+		expect(sniffAudioMimeType(jpeg(4, 4))).toBeUndefined()
+	})
+
+	it("detects FLAC", () => {
+		expect(sniffAudioMimeType(Buffer.from("fLaC\x00\x00\x00\x22", "binary"))).toBe("audio/flac")
+	})
+
+	it("detects the EBML header Chrome's MediaRecorder writes", () => {
+		expect(sniffAudioMimeType(Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x01, 0x00]))).toBe(
+			"audio/webm",
+		)
+	})
+
+	it("detects the ftyp box Safari's MediaRecorder writes, at offset 4", () => {
+		expect(sniffAudioMimeType(mp4())).toBe("audio/mp4")
+	})
+
+	it("returns undefined for an image", () => {
+		expect(sniffAudioMimeType(png(1, 1))).toBeUndefined()
+		expect(sniffAudioMimeType(WEBP)).toBeUndefined()
+	})
+})
+
+describe("validateAudioUpload", () => {
+	it("stores the sniffed type and never a duration", () => {
+		const wav = riff("WAVE")
+		expect(validateAudioUpload(wav)).toEqual({
+			mimeType: "audio/wav",
+			sizeBytes: wav.length,
+			durationMs: null,
+		})
+	})
+
+	it("refuses a payload that is not audio", () => {
+		expect(() => validateAudioUpload(Buffer.from("<script>alert(1)</script>", "utf8"))).toThrow(
+			ValidationError,
+		)
+	})
+
+	it("refuses a PNG offered as a recording", () => {
+		expect(() => validateAudioUpload(png(8, 8))).toThrow(ValidationError)
+	})
+
+	it("refuses an empty file", () => {
+		expect(() => validateAudioUpload(Buffer.alloc(0))).toThrow(ValidationError)
+	})
+
+	it("refuses anything over the byte cap", () => {
+		expect(() => validateAudioUpload(Buffer.alloc(MAX_AUDIO_BYTES + 1))).toThrow(/larger than/)
 	})
 })

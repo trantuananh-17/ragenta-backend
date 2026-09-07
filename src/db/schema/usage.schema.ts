@@ -42,7 +42,7 @@ export const usageLedger = pgTable(
 		/** Null when a job, not a person, caused the spend. */
 		userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
 
-		/** chat | embedding | rerank | ingestion | agent */
+		/** chat | embedding | rerank | ingestion | agent | speech */
 		operation: text("operation").notNull(),
 		provider: text("provider").notNull(),
 		model: text("model").notNull(),

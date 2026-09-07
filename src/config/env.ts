@@ -78,6 +78,27 @@ const envSchema = z.object({
 	STRIPE_PRICE_TOPUP_5M: z.string().optional(),
 	STRIPE_PRICE_TOPUP_15M: z.string().optional(),
 
+	/**
+	 * Speech, over the OpenAI audio API shape (ADR-038). Transcription and
+	 * synthesis are configured independently because they are bought
+	 * independently — hosted transcription beside a self-hosted Vietnamese voice
+	 * is the expected production shape, since OpenAI publishes no Vietnamese
+	 * voice at all. A half with an incomplete set of variables is off, not
+	 * half-on.
+	 *
+	 * The key is required even for a self-hosted server that ignores it; put any
+	 * value there, as with Ollama.
+	 */
+	SPEECH_STT_BASE_URL: z.url().optional(),
+	SPEECH_STT_API_KEY: z.string().optional(),
+	SPEECH_STT_MODEL: z.string().optional(),
+
+	SPEECH_TTS_BASE_URL: z.url().optional(),
+	SPEECH_TTS_API_KEY: z.string().optional(),
+	SPEECH_TTS_MODEL: z.string().optional(),
+	/** Required with the rest: voice ids are server-specific and none can be guessed. */
+	SPEECH_TTS_VOICE: z.string().optional(),
+
 	SMTP_HOST: z.string().optional(),
 	SMTP_PORT: z.coerce.number().int().positive().default(587),
 	SMTP_USER: z.string().optional(),
@@ -220,6 +241,29 @@ export const env = {
 					},
 				}
 			: undefined,
+
+	speech: {
+		stt:
+			raw.SPEECH_STT_BASE_URL && raw.SPEECH_STT_API_KEY && raw.SPEECH_STT_MODEL
+				? {
+						baseUrl: raw.SPEECH_STT_BASE_URL,
+						apiKey: raw.SPEECH_STT_API_KEY,
+						model: raw.SPEECH_STT_MODEL,
+					}
+				: undefined,
+		tts:
+			raw.SPEECH_TTS_BASE_URL &&
+			raw.SPEECH_TTS_API_KEY &&
+			raw.SPEECH_TTS_MODEL &&
+			raw.SPEECH_TTS_VOICE
+				? {
+						baseUrl: raw.SPEECH_TTS_BASE_URL,
+						apiKey: raw.SPEECH_TTS_API_KEY,
+						model: raw.SPEECH_TTS_MODEL,
+						voice: raw.SPEECH_TTS_VOICE,
+					}
+				: undefined,
+	},
 
 	providerKeys: {
 		openai: raw.OPENAI_API_KEY,

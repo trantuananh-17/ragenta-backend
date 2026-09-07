@@ -36,7 +36,13 @@ function nextPeriodStart(from: Date): Date {
 	return new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth() + 1, 1))
 }
 
-export type CreditSource = "chat" | "embedding" | "ingestion" | "agent" | "admin"
+export type CreditSource =
+	| "chat"
+	| "embedding"
+	| "ingestion"
+	| "agent"
+	| "speech"
+	| "admin"
 
 export interface SpendInput {
 	workspaceId: string

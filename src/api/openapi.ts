@@ -42,6 +42,10 @@ import {
 	updateProjectSchema,
 } from "../modules/project/project.dto"
 import {
+	synthesizeSpeechSchema,
+	transcribeAttachmentSchema,
+} from "../modules/speech/speech.dto"
+import {
 	createWorkspaceSchema,
 	inviteMemberSchema,
 	updateMemberRoleSchema,
@@ -470,7 +474,7 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 
 	"POST /v1/workspaces/:workspaceId/attachments": {
 		summary:
-			"Upload an image as multipart/form-data under `file`. The stored type is sniffed from the bytes, not taken from the declared one, and the row comes back unbound until a message is sent with it",
+			"Upload an image or a recording as multipart/form-data under `file`. The kind and the stored type are sniffed from the bytes, not taken from the declared ones, and the row comes back unbound until a message is sent with it",
 		tags: ["Attachments"],
 		access: "owner, admin, member",
 		status: 201,
@@ -492,6 +496,21 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		tags: ["Attachments"],
 		access: "owner, admin, member",
 		status: 204,
+	},
+
+	"POST /v1/workspaces/:workspaceId/attachments/:attachmentId/transcribe": {
+		summary:
+			"Transcribe a stored recording. The transcript is written onto the attachment, so a repeat call returns it with `cached: true` and charges nothing. Runs inside the request, and is charged on the duration the provider reports",
+		tags: ["Speech"],
+		access: "owner, admin, member",
+		body: transcribeAttachmentSchema,
+	},
+	"POST /v1/workspaces/:workspaceId/speech": {
+		summary:
+			"Speak a piece of text and return the audio bytes under the format's own content type. Charged per input character",
+		tags: ["Speech"],
+		access: "owner, admin, member",
+		body: synthesizeSpeechSchema,
 	},
 
 	"GET /v1/workspaces/:workspaceId/agent-tools": {
