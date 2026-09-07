@@ -10,11 +10,13 @@ pnpm dev:api        # tsx watch, port 8080
 pnpm dev:worker
 pnpm build          # tsup → dist/main.api.js, dist/main.worker.js, dist/db/migrate.js
 pnpm typecheck
+pnpm test          # vitest run — unit tests only
 pnpm db:generate    # after editing src/db/schema/* — writes SQL into ./drizzle
 pnpm db:migrate
 ```
 
-No test suite yet. `docker compose up -d` starts postgres and redis for local work.
+`pnpm test` runs Vitest — unit tests only, no database, no Redis, no provider call, because the
+check workflow has none of those. `docker compose up -d` starts postgres and redis for local work.
 
 ## Vendored Better Auth skills
 
