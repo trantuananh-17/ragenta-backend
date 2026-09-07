@@ -87,6 +87,11 @@ export const modelService = {
 						// entirely, so the key would be missing rather than null and every
 						// client parsing this payload would reject the whole catalogue.
 						contextWindow: entry.contextWindow ?? null,
+						// `false`, not `null`: "this model cannot read an image" is a
+						// definite fact rather than a missing one, and the composer uses
+						// it to decide whether to offer an attach button at all. Same
+						// coalescing reason as above — the key must always be present.
+						vision: entry.vision ?? false,
 						configured: callable,
 						entitled,
 						selectable: callable && entitled,

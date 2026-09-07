@@ -75,6 +75,11 @@ export function documentKey(workspaceId: string, documentId: string): string {
 	return `documents/${workspaceId}/${documentId}`
 }
 
+/** `attachments/<workspace>/<attachment>` — same shape, same reason, different prefix. */
+export function attachmentKey(workspaceId: string, attachmentId: string): string {
+	return `attachments/${workspaceId}/${attachmentId}`
+}
+
 export async function putObject(
 	key: string,
 	body: Buffer,

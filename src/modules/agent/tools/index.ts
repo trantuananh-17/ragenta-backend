@@ -4,6 +4,8 @@ import type { ToolDefinition } from "../../../ai/clients"
 import type { CitationCollector } from "../citations"
 import { apiCallTool } from "./api-call.tool"
 import { httpRequestTool } from "./http-request.tool"
+import { imageOcrTool } from "./image-ocr.tool"
+import { imageVisionTool } from "./image-vision.tool"
 import { createKnowledgeSearchTool } from "./knowledge-search.tool"
 import { createSaveDocumentTool } from "./save-document.tool"
 import { sendEmailTool } from "./send-email.tool"
@@ -27,6 +29,8 @@ export const TOOL_IDS = [
 	"api_call",
 	"send_email",
 	"save_document",
+	"image_ocr",
+	"image_vision",
 ] as const
 export type ToolId = (typeof TOOL_IDS)[number]
 
@@ -94,6 +98,20 @@ export const TOOL_CATALOGUE: Record<
 		writes: true,
 		requires: null,
 	},
+	image_ocr: {
+		title: "Read a document image",
+		description:
+			"Extract the text, tables and labelled values from an image attachment — a scan, a receipt, a form. Needs a vision-capable model, and re-uses an extraction the image already has.",
+		writes: false,
+		requires: null,
+	},
+	image_vision: {
+		title: "Look at an image",
+		description:
+			"Answer a question about what an image attachment shows. Needs a vision-capable model configured for the workspace.",
+		writes: false,
+		requires: null,
+	},
 }
 
 /** Whether a tool changes something outside Ragenta. */
@@ -123,6 +141,12 @@ export function toolsFor(
 		if (id === "web_search") tools.push(webSearchTool)
 		if (id === "api_call") tools.push(apiCallTool)
 		if (id === "send_email") tools.push(sendEmailTool)
+		// The attachment id is an argument here, unlike a knowledge base id,
+		// because the run has no fixed list of images — but it is resolved
+		// workspace-scoped, so an id from another tenant is a 404 rather than a
+		// leak (`image-attachment.ts`).
+		if (id === "image_ocr") tools.push(imageOcrTool)
+		if (id === "image_vision") tools.push(imageVisionTool)
 	}
 	return tools
 }

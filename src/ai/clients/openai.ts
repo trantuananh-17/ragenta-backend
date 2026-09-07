@@ -83,6 +83,27 @@ function toWireMessages(messages: ChatMessage[]) {
 				})),
 			}
 		}
+		if (message.role === "user" && message.images?.length) {
+			return {
+				role: "user" as const,
+				content: [
+					// Omitted when absent: an uncaptioned image is the ordinary case,
+					// and an empty text part is at best noise and at worst refused by
+					// a compatible endpoint that is stricter than OpenAI itself.
+					...(message.content ? [{ type: "text" as const, text: message.content }] : []),
+					...message.images.map((image) => ({
+						type: "image_url" as const,
+						image_url: {
+							url: `data:${image.mediaType};base64,${image.dataBase64}`,
+						},
+					})),
+				],
+			}
+		}
+		// A message without images stays a plain string. The array form is
+		// equivalent for OpenAI itself but not for every compatible endpoint, and
+		// there is no reason to make every text-only turn of every conversation
+		// the shape that is least widely accepted.
 		return { role: message.role, content: message.content }
 	})
 }
@@ -134,6 +155,13 @@ export function createOpenAiCompatible(
 		id,
 		defaultBaseUrl,
 		supportsTools: options.supportsTools !== false,
+		// The adapter can send images; whether the model looks at them is a
+		// property of the model, not of the endpoint. Every deployment reached
+		// through here — OpenRouter, DeepSeek, Groq, xAI, Mistral, Ollama — mixes
+		// models that read images with models that cannot, so the per-model
+		// `vision` flag in `src/ai/models.ts` is what decides whether one is
+		// offered; this only says the wire format is produced.
+		supportsVision: true,
 
 		async chat(credential, request: ChatRequest): Promise<ChatResult> {
 			const response = await fetch(`${base(credential)}/chat/completions`, {

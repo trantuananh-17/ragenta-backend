@@ -59,23 +59,43 @@ export const updateConversationSchema = z
 		message: "Provide at least one field to change.",
 	})
 
-export const sendMessageSchema = z.object({
-	content: z.string().trim().min(1).max(8000),
-	/**
-	 * Narrows retrieval to specific documents in the conversation's knowledge
-	 * bases. Empty means every document in them.
-	 */
-	documentIds: z.array(z.string().min(1)).max(50).optional(),
-	/** Overrides the resolved chat model for this turn only. */
-	model: z
-		.object({ provider: z.string().trim().min(1), model: z.string().trim().min(1) })
-		.optional(),
-	/** Per-turn overrides of the thread's retrieval settings. */
-	topK: z.number().int().min(1).max(20).optional(),
-	searchMode: z.enum(["hybrid", "vector", "keyword"]).optional(),
-	similarityThreshold: z.number().min(0).max(1).optional(),
-	vectorWeight: z.number().min(0).max(1).optional(),
-})
+export const sendMessageSchema = z
+	.object({
+		/**
+		 * Empty is legitimate, and only because of `attachmentIds` below: pasting
+		 * an image into the composer and pressing send without typing anything is
+		 * the ordinary way to ask "what is this?". Defaulted rather than made
+		 * optional so every reader downstream still gets a string.
+		 */
+		content: z.string().trim().max(8000).default(""),
+		/**
+		 * Images already uploaded through `POST /attachments`, in the order they
+		 * were attached. Ids only — the send re-reads each row in this workspace,
+		 * because an id the client happens to hold is not permission to attach it.
+		 *
+		 * Six is what a composer can show; fewer than that reach the model, and
+		 * `MAX_TURN_IMAGES` in `attachments.ts` says why.
+		 */
+		attachmentIds: z.array(z.string().min(1)).max(6).optional(),
+		/**
+		 * Narrows retrieval to specific documents in the conversation's knowledge
+		 * bases. Empty means every document in them.
+		 */
+		documentIds: z.array(z.string().min(1)).max(50).optional(),
+		/** Overrides the resolved chat model for this turn only. */
+		model: z
+			.object({ provider: z.string().trim().min(1), model: z.string().trim().min(1) })
+			.optional(),
+		/** Per-turn overrides of the thread's retrieval settings. */
+		topK: z.number().int().min(1).max(20).optional(),
+		searchMode: z.enum(["hybrid", "vector", "keyword"]).optional(),
+		similarityThreshold: z.number().min(0).max(1).optional(),
+		vectorWeight: z.number().min(0).max(1).optional(),
+	})
+	.refine((value) => value.content.length > 0 || (value.attachmentIds?.length ?? 0) > 0, {
+		message: "A message needs text, an attachment, or both.",
+		path: ["content"],
+	})
 
 export type CreateConversationInput = z.infer<typeof createConversationSchema>
 export type UpdateConversationInput = z.infer<typeof updateConversationSchema>

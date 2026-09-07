@@ -27,6 +27,18 @@ export interface ModelDefinition {
 	/** Context window in tokens, for the model picker. */
 	contextWindow?: number
 	/**
+	 * Whether the model reads images in a user message.
+	 *
+	 * Deliberately a flag rather than a fourth `ModelCapability`. A vision model
+	 * is still a chat model: `capability` chooses the code path, `vision` only
+	 * changes the payload sent down it. The capability set is also mirrored
+	 * outside this file as a hard three-value enum — a Postgres CHECK constraint
+	 * on `provider_model` and a `z.enum` in the frontend's model service — so a
+	 * fourth value would fail the constraint on write and throw on parse in every
+	 * model picker at once, which is not what "this model can see" should cost.
+	 */
+	vision?: boolean
+	/**
 	 * Vector width, embedding models only. It selects the Qdrant collection a
 	 * knowledge base indexes into, so a wrong number here fails indexing outright
 	 * rather than quietly degrading retrieval.
@@ -42,6 +54,7 @@ export const MODELS: ModelDefinition[] = [
 		tier: "premium",
 		rates: { input: 15, output: 75, embedding: 0 },
 		contextWindow: 200_000,
+		vision: true,
 	},
 	{
 		provider: "anthropic",
@@ -50,6 +63,7 @@ export const MODELS: ModelDefinition[] = [
 		tier: "premium",
 		rates: { input: 3, output: 15, embedding: 0 },
 		contextWindow: 200_000,
+		vision: true,
 	},
 	{
 		provider: "anthropic",
@@ -58,6 +72,7 @@ export const MODELS: ModelDefinition[] = [
 		tier: "economy",
 		rates: { input: 1, output: 5, embedding: 0 },
 		contextWindow: 200_000,
+		vision: true,
 	},
 	{
 		provider: "openai",
@@ -66,6 +81,7 @@ export const MODELS: ModelDefinition[] = [
 		tier: "premium",
 		rates: { input: 2.5, output: 10, embedding: 0 },
 		contextWindow: 128_000,
+		vision: true,
 	},
 	{
 		provider: "openai",
@@ -74,6 +90,7 @@ export const MODELS: ModelDefinition[] = [
 		tier: "economy",
 		rates: { input: 0.15, output: 0.6, embedding: 0 },
 		contextWindow: 128_000,
+		vision: true,
 	},
 	{
 		provider: "google",
@@ -82,6 +99,7 @@ export const MODELS: ModelDefinition[] = [
 		tier: "premium",
 		rates: { input: 1.25, output: 10, embedding: 0 },
 		contextWindow: 1_000_000,
+		vision: true,
 	},
 	{
 		provider: "google",
@@ -90,6 +108,7 @@ export const MODELS: ModelDefinition[] = [
 		tier: "economy",
 		rates: { input: 0.3, output: 2.5, embedding: 0 },
 		contextWindow: 1_000_000,
+		vision: true,
 	},
 	// Embedding models are economy on purpose: the free tier has to be able to
 	// upload and index documents, or it cannot show what the product does.

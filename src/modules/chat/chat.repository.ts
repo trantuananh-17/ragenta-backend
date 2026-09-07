@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq } from "drizzle-orm"
+import { and, asc, count, desc, eq, inArray, isNull } from "drizzle-orm"
 
 import { db } from "../../db/client"
 import type { DbExecutor } from "../../db/client"
@@ -7,11 +7,21 @@ import {
 	conversationKnowledgeBase,
 	knowledgeBase,
 	message,
+	messageAttachment,
 } from "../../db/schema"
 import type { PaginationQuery } from "../../shared/pagination"
 
 export type ConversationRow = typeof conversation.$inferSelect
 export type MessageRow = typeof message.$inferSelect
+/**
+ * `message_attachment` is read and written from here as well as from the
+ * attachment module, which owns uploading and deleting. Binding is the one
+ * operation only a send can perform — it needs the message id, which does not
+ * exist until the turn is written — and it belongs in the same transaction as
+ * that write, so it lives beside it rather than behind a call the attachment
+ * service would have to expose for one caller.
+ */
+export type AttachmentRow = typeof messageAttachment.$inferSelect
 
 export const chatRepository = {
 	async listConversations(
@@ -180,6 +190,56 @@ export const chatRepository = {
 	async insertMessage(entry: typeof message.$inferInsert, executor: DbExecutor = db) {
 		const rows = await executor.insert(message).values(entry).returning()
 		return rows[0]
+	},
+
+	/**
+	 * Claims uploaded attachments for the message that was just written.
+	 *
+	 * `message_id is null` is part of the statement rather than a check the
+	 * caller makes first, exactly as the attachment repository's delete has it:
+	 * an id is single-use, and two sends racing on the same one must produce one
+	 * winner rather than two messages pointing at the same image. The ids that
+	 * were actually claimed come back so the caller can tell which it lost.
+	 */
+	async bindAttachments(
+		workspaceId: string,
+		conversationId: string,
+		messageId: string,
+		attachmentIds: string[],
+		executor: DbExecutor = db,
+	) {
+		if (attachmentIds.length === 0) return []
+		const rows = await executor
+			.update(messageAttachment)
+			.set({ conversationId, messageId })
+			.where(
+				and(
+					eq(messageAttachment.organizationId, workspaceId),
+					inArray(messageAttachment.id, attachmentIds),
+					isNull(messageAttachment.messageId),
+				),
+			)
+			.returning({ id: messageAttachment.id })
+		return rows.map((row) => row.id)
+	},
+
+	/** What a set of messages carries, oldest first. Empty in returns empty out. */
+	async listAttachmentsForMessages(
+		workspaceId: string,
+		messageIds: string[],
+		executor: DbExecutor = db,
+	): Promise<AttachmentRow[]> {
+		if (messageIds.length === 0) return []
+		return executor
+			.select()
+			.from(messageAttachment)
+			.where(
+				and(
+					eq(messageAttachment.organizationId, workspaceId),
+					inArray(messageAttachment.messageId, messageIds),
+				),
+			)
+			.orderBy(asc(messageAttachment.createdAt))
 	},
 
 	async updateMessage(

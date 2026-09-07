@@ -94,6 +94,26 @@ function split(messages: ChatMessage[]) {
 			continue
 		}
 
+		if (message.role === "user" && message.images?.length) {
+			// An image sent with no caption is the ordinary case, and Anthropic
+			// refuses a text block that is empty — so the block is omitted rather
+			// than sent blank, exactly as the assistant branch above does.
+			const blocks: unknown[] = []
+			if (message.content) blocks.push({ type: "text", text: message.content })
+			for (const image of message.images) {
+				blocks.push({
+					type: "image",
+					source: {
+						type: "base64",
+						media_type: image.mediaType,
+						data: image.dataBase64,
+					},
+				})
+			}
+			wire.push({ role: "user", content: blocks })
+			continue
+		}
+
 		wire.push({ role: message.role, content: message.content })
 	}
 
@@ -133,6 +153,7 @@ export const anthropicClient: ProviderClient = {
 	id: "anthropic",
 	defaultBaseUrl: DEFAULT_BASE_URL,
 	supportsTools: true,
+	supportsVision: true,
 
 	async chat(credential, request: ChatRequest): Promise<ChatResult> {
 		const { system, messages } = split(request.messages)

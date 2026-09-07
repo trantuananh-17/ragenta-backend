@@ -1,13 +1,21 @@
 import { findCatalogueModel, requireCredential } from "../../ai/catalogue"
 import { chatCapableClient } from "../../ai/clients"
-import type { ChatCapableClient, ChatMessage, TokenUsage } from "../../ai/clients"
+import type { ChatCapableClient, ChatMessage, ImagePart, TokenUsage } from "../../ai/clients"
 import { estimateTokens } from "../../ai/tokens"
 import type { MessageCitation } from "../../db/schema"
-import { EntitlementError, NotFoundError, ValidationError, isAppError } from "../../shared/errors"
+import {
+	ConflictError,
+	EntitlementError,
+	NotFoundError,
+	ValidationError,
+	isAppError,
+} from "../../shared/errors"
 import { newId } from "../../shared/id"
 import { logger } from "../../shared/logger"
 import type { PaginationQuery } from "../../shared/pagination"
 import { page } from "../../shared/pagination"
+import { getObject } from "../../storage/objects"
+import { attachmentService } from "../attachment/attachment.service"
 import { billingService } from "../billing/billing.service"
 import { knowledgeService } from "../knowledge/knowledge.service"
 import { modelService } from "../model/model.service"
@@ -19,8 +27,15 @@ import type {
 } from "../retrieval/retrieval.service"
 import { resolveRerankModel } from "../../ai/rerank"
 import { usageService } from "../usage/usage.service"
+import {
+	MAX_TURN_IMAGES,
+	planTurnImages,
+	toMessageAttachment,
+	withExtractedText,
+} from "./attachments"
+import type { TurnAttachment } from "./attachments"
 import { chatRepository } from "./chat.repository"
-import type { ConversationRow } from "./chat.repository"
+import type { AttachmentRow, ConversationRow } from "./chat.repository"
 import { assemblePrompt } from "./prompt"
 import type { Grounding } from "./prompt"
 import { refineQuery } from "./refine"
@@ -74,6 +89,13 @@ export interface PreparedTurn {
 	selection: { provider: string; model: string }
 	/** Carried through because retrieval now runs inside the stream, not before it. */
 	input: SendMessageInput
+	/**
+	 * The images this question carries, already checked against the workspace and
+	 * against the model. Rows rather than ids: they are read to refuse the turn,
+	 * and re-reading them when the prompt is built would be the second read of
+	 * something that cannot have changed in between.
+	 */
+	attachments: AttachmentRow[]
 	userMessageId: string
 	assistantMessageId: string
 	actorId: string
@@ -120,6 +142,35 @@ export type ChatStreamEvent =
 			usage: { input: number; output: number }
 		}
 	| { type: "error"; message: string }
+
+/** What the images of a turn contribute, once the cap has been applied. */
+interface CarriedImages {
+	/** Per earlier message: the bytes it still sends, and the text standing in for the rest. */
+	byMessage: Map<string, { images: ImagePart[]; transcribed: TurnAttachment[] }>
+	/** The current question's own images, in the order they were attached. */
+	current: ImagePart[]
+}
+
+function groupByMessageId(rows: AttachmentRow[]): Map<string, AttachmentRow[]> {
+	const grouped = new Map<string, AttachmentRow[]>()
+	for (const row of rows) {
+		if (!row.messageId) continue
+		const existing = grouped.get(row.messageId)
+		if (existing) existing.push(row)
+		else grouped.set(row.messageId, [row])
+	}
+	return grouped
+}
+
+function toTurnAttachment(row: AttachmentRow): TurnAttachment {
+	const text = row.extracted?.text?.trim()
+	return {
+		id: row.id,
+		fileName: row.fileName,
+		mimeType: row.mimeType,
+		extractedText: text ? text : null,
+	}
+}
 
 export const chatService = {
 	async listConversations(workspaceId: string, query: PaginationQuery) {
@@ -254,7 +305,25 @@ export const chatService = {
 			conversationId,
 			query,
 		)
-		return page(items, total, query)
+
+		// One extra query for the page rather than a join: a message has no
+		// attachment far more often than it has one, and a join would multiply
+		// every row of the transcript to carry the exception.
+		const attachments = groupByMessageId(
+			await chatRepository.listAttachmentsForMessages(
+				workspaceId,
+				items.map((row) => row.id),
+			),
+		)
+
+		return page(
+			items.map((row) => ({
+				...row,
+				attachments: (attachments.get(row.id) ?? []).map(toMessageAttachment),
+			})),
+			total,
+			query,
+		)
 	},
 
 	/**
@@ -296,15 +365,29 @@ export const chatService = {
 			userId: actorId,
 		})
 
+		const userMessageId = userMessage?.id ?? newId()
+
 		try {
-			return await this.buildTurn(
+			const turn = await this.buildTurn(
 				workspaceId,
 				conversation,
 				input,
 				actorId,
-				userMessage?.id ?? newId(),
+				userMessageId,
 				assistantMessageId,
 			)
+
+			/**
+			 * The images are claimed only once the turn has survived every refusal.
+			 *
+			 * An attachment id is single-use, so binding it before the credit check
+			 * would spend it on a turn that never ran and leave the user with an
+			 * image they cannot re-send. The message row is written first for the
+			 * opposite reason — the typed question is not recoverable, an unbound
+			 * upload is.
+			 */
+			await this.bindAttachments(workspaceId, conversation.id, userMessageId, turn.attachments)
+			return turn
 		} catch (error) {
 			await this.recordRefusedTurn(workspaceId, conversation.id, assistantMessageId, actorId, error)
 			throw error
@@ -382,9 +465,93 @@ export const chatService = {
 			client,
 			selection,
 			input,
+			attachments: await this.resolveAttachments(
+				workspaceId,
+				input.attachmentIds ?? [],
+				selection,
+				client,
+			),
 			userMessageId,
 			assistantMessageId,
 			actorId,
+		}
+	},
+
+	/**
+	 * The images a turn claims, checked before a token is generated.
+	 *
+	 * Every refusal here is a status code for the same reason the credit check
+	 * above is one: the client can act on "that model cannot see" — switch model,
+	 * remove the image — and cannot act on an error frame that arrives after the
+	 * UI has already started rendering an answer.
+	 */
+	async resolveAttachments(
+		workspaceId: string,
+		attachmentIds: string[],
+		selection: { provider: string; model: string },
+		client: ChatCapableClient,
+	): Promise<AttachmentRow[]> {
+		if (attachmentIds.length === 0) return []
+
+		const rows = await Promise.all(
+			// Read through the attachment service, which scopes every read to the
+			// workspace. Holding an id is not evidence of being allowed to send it.
+			[...new Set(attachmentIds)].map((id) => attachmentService.findOrFail(workspaceId, id)),
+		)
+
+		for (const row of rows) {
+			if (row.kind !== "image") {
+				throw new ValidationError(
+					`"${row.fileName}" is not an image. Only images can be attached to a message.`,
+				)
+			}
+			if (row.messageId) {
+				throw new ConflictError(
+					`"${row.fileName}" has already been sent. Upload it again to send it a second time.`,
+				)
+			}
+		}
+
+		const definition = await findCatalogueModel(selection.provider, selection.model)
+		// Two separate things, and both have to be true: the model has to be able
+		// to see, and this deployment's adapter has to actually put the image on
+		// the wire. Either one missing means the model answers about a picture it
+		// never received, fluently and billably, with nothing in the reply to say
+		// so — which is why neither is inferred.
+		if (!definition?.vision || !client.supportsVision) {
+			throw new ValidationError(
+				`${selection.model} cannot read images. Choose a model that can, or send the message without its attachments.`,
+			)
+		}
+
+		return rows
+	},
+
+	/**
+	 * Hands the uploaded images to the message that was just written.
+	 *
+	 * The bind is conditional on the row still being unbound, so a second send
+	 * racing on the same id loses here rather than producing two messages that
+	 * point at one image.
+	 */
+	async bindAttachments(
+		workspaceId: string,
+		conversationId: string,
+		messageId: string,
+		attachments: AttachmentRow[],
+	) {
+		if (attachments.length === 0) return
+
+		const bound = await chatRepository.bindAttachments(
+			workspaceId,
+			conversationId,
+			messageId,
+			attachments.map((row) => row.id),
+		)
+		if (bound.length !== attachments.length) {
+			throw new ConflictError(
+				"One of these images was sent in another message. Upload it again to send it here.",
+			)
 		}
 	},
 
@@ -407,7 +574,15 @@ export const chatService = {
 			...conversation.additionalKnowledgeBaseIds,
 		]
 
-		const history = (
+		/**
+		 * An image sent with no caption has nothing to search for. Embedding an
+		 * empty string returns whichever passages happen to sit nearest the origin,
+		 * and the grounded prompt would then tell the model to answer out of them —
+		 * when the question is the picture.
+		 */
+		const searchable = baseIds.length > 0 && input.content.length > 0
+
+		const historyRows = (
 			// One extra row, because the question being answered was written before
 			// this call and would otherwise take a slot in the window it is not part
 			// of — it is passed to the prompt separately.
@@ -420,10 +595,21 @@ export const chatService = {
 			// and dropping it from the history would make the next turn respond to a
 			// conversation that never happened.
 			.filter((row) => row.status === "complete" || row.status === "stopped")
-			.map<ChatMessage>((row) => ({
+
+		const images = await this.gatherImages(
+			workspaceId,
+			turn,
+			historyRows.map((row) => row.id),
+		)
+
+		const history = historyRows.map<ChatMessage>((row) => {
+			const carried = images.byMessage.get(row.id)
+			return {
 				role: row.role === "assistant" ? "assistant" : "user",
-				content: row.content,
-			}))
+				content: withExtractedText(row.content, carried?.transcribed ?? []),
+				...(carried && carried.images.length > 0 ? { images: carried.images } : {}),
+			}
+		})
 
 		/**
 		 * The question is rewritten for *retrieval only*, never for the prompt.
@@ -435,7 +621,7 @@ export const chatService = {
 		 * call would be paid for and thrown away.
 		 */
 		const refined =
-			baseIds.length > 0 && conversation.refineFollowUps
+			searchable && conversation.refineFollowUps
 				? await refineQuery({
 						client: turn.client,
 						credential: await requireCredential(turn.selection.provider),
@@ -448,7 +634,7 @@ export const chatService = {
 		let retrieved: RetrievedChunk[] = []
 		let rerankUsage: RetrievalOutcome["rerankUsage"] = null
 
-		if (baseIds.length > 0) {
+		if (searchable) {
 			const outcome = await retrievalService.retrieve({
 				workspaceId,
 				knowledgeBaseIds: baseIds,
@@ -477,18 +663,22 @@ export const chatService = {
 			rerankUsage = outcome.rerankUsage
 		}
 
-		const grounding: Grounding =
-			baseIds.length === 0
-				? "open"
-				: conversation.groundedOnly
-					? "documents"
-					: "documents-open"
+		const grounding: Grounding = !searchable
+			? "open"
+			: conversation.groundedOnly
+				? "documents"
+				: "documents-open"
 
 		const { messages, used } = assemblePrompt(input.content, retrieved, history, {
 			contextWindow: definition?.contextWindow ?? FALLBACK_CONTEXT_WINDOW,
 			maxOutputTokens: MAX_OUTPUT_TOKENS,
 			grounding,
 		})
+
+		// Attached after assembly rather than passed into it: `assemblePrompt` owns
+		// the text budget and an image has no length it could budget against.
+		const question = messages.at(-1)
+		if (question && images.current.length > 0) question.images = images.current
 
 		const citations: MessageCitation[] = used.map((entry, index) => ({
 			index: index + 1,
@@ -508,6 +698,92 @@ export const chatService = {
 			rerankUsage,
 			searchedFor: refined.rewritten ? refined.question : null,
 			refineUsage: refined.usage,
+		}
+	},
+
+	/**
+	 * Loads the bytes of every image this turn will send.
+	 *
+	 * Inlined rather than linked because a presigned MinIO URL is not reachable
+	 * from a provider's network (`ImagePart`), so the bytes travel through this
+	 * process on every turn that carries them. `planTurnImages` decides which
+	 * ones those are and why.
+	 */
+	async gatherImages(
+		workspaceId: string,
+		turn: PreparedTurn,
+		historyMessageIds: string[],
+	): Promise<CarriedImages> {
+		const empty: CarriedImages = { byMessage: new Map(), current: [] }
+		if (turn.attachments.length === 0 && historyMessageIds.length === 0) return empty
+
+		const historyRows = (
+			await chatRepository.listAttachmentsForMessages(workspaceId, historyMessageIds)
+		).filter((row) => row.kind === "image" && row.status === "ready")
+		if (turn.attachments.length === 0 && historyRows.length === 0) return empty
+
+		const plan = planTurnImages(
+			turn.attachments.map(toTurnAttachment),
+			historyRows.map(toTurnAttachment),
+		)
+		if (plan.dropped.length > 0) {
+			log.info("chat.images_capped", {
+				conversationId: turn.conversation.id,
+				dropped: plan.dropped.length,
+				limit: MAX_TURN_IMAGES,
+			})
+		}
+
+		const rowsById = new Map(
+			[...historyRows, ...turn.attachments].map((row) => [row.id, row] as const),
+		)
+		const currentIds = new Set(turn.attachments.map((row) => row.id))
+
+		const loaded = await Promise.all(
+			plan.inline.map(async (entry) => {
+				const row = rowsById.get(entry.id)
+				if (!row) return null
+				try {
+					const bytes = await getObject(row.storageKey)
+					return [
+						row.id,
+						{ mediaType: row.mimeType, dataBase64: bytes.toString("base64") },
+					] as const
+				} catch (error) {
+					// An image the question is about *is* the question, so a turn that
+					// cannot read it fails rather than answering about something the
+					// user did not send. An older one is only context: the thread is
+					// still worth continuing without it.
+					if (currentIds.has(row.id)) throw error
+					log.warn("chat.attachment_unreadable", {
+						attachmentId: row.id,
+						message: error instanceof Error ? error.message : "unknown",
+					})
+					return null
+				}
+			}),
+		)
+
+		const parts = new Map(loaded.filter((entry) => entry !== null))
+		const transcribedIds = new Set(plan.transcribed.map((entry) => entry.id))
+		const byMessage: CarriedImages["byMessage"] = new Map()
+
+		for (const row of historyRows) {
+			if (!row.messageId) continue
+			const part = parts.get(row.id)
+			if (!part && !transcribedIds.has(row.id)) continue
+
+			const carried = byMessage.get(row.messageId) ?? { images: [], transcribed: [] }
+			if (part) carried.images.push(part)
+			else carried.transcribed.push(toTurnAttachment(row))
+			byMessage.set(row.messageId, carried)
+		}
+
+		return {
+			byMessage,
+			current: turn.attachments
+				.map((row) => parts.get(row.id))
+				.filter((part) => part !== undefined),
 		}
 	},
 
@@ -629,6 +905,14 @@ export const chatService = {
 			 * and charged Ragenta for them, so passing on nothing would make "stop"
 			 * a way to read answers for free. They are estimated, and the usage row
 			 * records that they were.
+			 *
+			 * `estimateTokens` counts characters and knows nothing about images, so a
+			 * turn that carried one and ended early is under-billed by whatever the
+			 * provider charges for the picture. Left alone deliberately: this path
+			 * only runs when the provider never reported its counts, every other turn
+			 * bills from what the provider actually said, and the estimator is a
+			 * sizing tool shared with chunking and prompt budgeting rather than a
+			 * billing one.
 			 */
 			const estimated = usage.inputTokens === 0 && usage.outputTokens === 0
 			const billed = estimated

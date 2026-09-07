@@ -468,6 +468,32 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		access: "owner, admin, member",
 	},
 
+	"POST /v1/workspaces/:workspaceId/attachments": {
+		summary:
+			"Upload an image as multipart/form-data under `file`. The stored type is sniffed from the bytes, not taken from the declared one, and the row comes back unbound until a message is sent with it",
+		tags: ["Attachments"],
+		access: "owner, admin, member",
+		status: 201,
+	},
+	"GET /v1/workspaces/:workspaceId/attachments/:attachmentId": {
+		summary: "Attachment metadata, and the extraction once one exists",
+		tags: ["Attachments"],
+		access: "any member",
+	},
+	"GET /v1/workspaces/:workspaceId/attachments/:attachmentId/content": {
+		summary: "Redirects to a short-lived presigned URL for the bytes. Usable as an image source",
+		tags: ["Attachments"],
+		access: "any member",
+		status: 302,
+	},
+	"DELETE /v1/workspaces/:workspaceId/attachments/:attachmentId": {
+		summary:
+			"Discard an attachment that has not been sent yet. Refused with a conflict once it belongs to a message — delete the message instead",
+		tags: ["Attachments"],
+		access: "owner, admin, member",
+		status: 204,
+	},
+
 	"GET /v1/workspaces/:workspaceId/agent-tools": {
 		summary: "The tools this deployment can give an agent",
 		tags: ["Agents"],

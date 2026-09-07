@@ -78,6 +78,11 @@ async function load(): Promise<Snapshot> {
 				embedding: Number(row.embeddingPerMillion),
 			},
 			contextWindow: row.contextWindow ?? undefined,
+			// No `vision` here because `provider_model` has no such column yet, so a
+			// row leaves the flag unset and images are not offered for that model.
+			// That is the safe direction: the alternative is sending an image to a
+			// model that cannot read it and billing a workspace for an answer
+			// written from the text alone.
 			embeddingDimensions: row.embeddingDimensions ?? undefined,
 			custom: true,
 			enabled: row.enabled,

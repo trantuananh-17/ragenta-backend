@@ -23,9 +23,31 @@ export interface ToolCall {
 	arguments: string
 }
 
+/**
+ * An image attached to a user message, carried as bytes rather than a link.
+ *
+ * A presigned object-storage URL would be the obvious choice and does not work
+ * here: MinIO binds to 127.0.0.1 on the VM and is only reachable through nginx,
+ * so a URL Ragenta can sign is a URL OpenAI's, Anthropic's and Google's servers
+ * cannot fetch. They would report a broken image — or, worse, answer about the
+ * text alone. Inlining the bytes is the only form all three can actually read.
+ */
+export interface ImagePart {
+	/** An IANA image type the provider accepts: image/png, image/jpeg, image/webp, image/gif. */
+	mediaType: string
+	/** Raw base64, with no `data:` prefix. */
+	dataBase64: string
+}
+
 export interface ChatMessage {
 	role: ChatRole
 	content: string
+	/**
+	 * Set on a user message that carries images. Text stays in `content` so that
+	 * every existing caller and every stored transcript keeps its shape; only a
+	 * message that actually has images is sent in a provider's multi-part form.
+	 */
+	images?: ImagePart[]
 	/** Set on an assistant message that asked for tools. */
 	toolCalls?: ToolCall[]
 	/** Set on a `tool` message: which call it answers. */
@@ -167,6 +189,17 @@ export interface ProviderClient {
 	 * published, not when it runs.
 	 */
 	readonly supportsTools?: boolean
+	/**
+	 * Whether `chat` and `streamChat` send a message's `images` to the model.
+	 *
+	 * Declared for the same reason as `supportsTools`: a gateway speaking an
+	 * OpenAI-compatible route may accept a multi-part message and drop the image
+	 * parts, and a model answering fluently about a picture it never received is
+	 * a failure nobody can detect from the outside — the reply is plausible, the
+	 * bill is real, and nothing in the response says the image was ignored. An
+	 * adapter that has not declared this is not offered an image at all.
+	 */
+	readonly supportsVision?: boolean
 	chat?(credential: ProviderCredential, request: ChatRequest): Promise<ChatResult>
 	streamChat?(
 		credential: ProviderCredential,

@@ -11,6 +11,7 @@
     "start:api": "node dist/main.api.js",
     "start:worker": "node dist/main.worker.js",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "docs:check": "tsx scripts/smoke-openapi.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
@@ -40,6 +41,7 @@
     "drizzle-kit": "^0.31.10",
     "tsup": "^8.5.1",
     "tsx": "^4.7.1",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vitest": "^5.0.0"
   }
 }

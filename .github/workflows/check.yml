@@ -57,6 +57,12 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # Unit tests only — no database, no Redis, no provider call. This runner
+      # has none of those, so anything needing them would have to be skipped,
+      # and a skipped test in a required gate is worse than no test at all.
+      - name: Test
+        run: pnpm test
+
       - name: Build
         run: pnpm build
 

@@ -98,6 +98,21 @@ function toContents(messages: ChatMessage[]) {
 			continue
 		}
 
+		if (message.role === "user" && message.images?.length) {
+			// An uncaptioned image is the ordinary case, so an empty text part is
+			// omitted rather than sent blank — the same shape the assistant branch
+			// above uses.
+			const parts: unknown[] = []
+			if (message.content) parts.push({ text: message.content })
+			for (const image of message.images) {
+				parts.push({
+					inlineData: { mimeType: image.mediaType, data: image.dataBase64 },
+				})
+			}
+			contents.push({ role: "user", parts })
+			continue
+		}
+
 		contents.push({
 			role: message.role === "assistant" ? "model" : "user",
 			parts: [{ text: message.content }],
@@ -193,6 +208,7 @@ export const googleClient: ProviderClient = {
 	id: "google",
 	defaultBaseUrl: DEFAULT_BASE_URL,
 	supportsTools: true,
+	supportsVision: true,
 
 	async chat(credential, request: ChatRequest): Promise<ChatResult> {
 		const { systemInstruction, contents } = toContents(request.messages)
