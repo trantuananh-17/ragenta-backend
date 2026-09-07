@@ -66,12 +66,17 @@ export const speechSynthesizeTool: AgentTool = {
 				context.workspaceId,
 				{ text: input.text, voice: input.voice, format: SYNTHESIS_FORMAT },
 				context.userId,
-				// A stable identity for *this* step of *this* run, so a retry policy or
-				// a replay after a crash lands on the reference it already had and the
-				// unique index refuses the second charge. Its own namespace, because
-				// the runner's own step charges use `agent-run:{runId}:step:{seq}` and
-				// two different charges must never collide on one reference.
-				`speech:synthesize:${context.runId}:${context.stepSeq}`,
+				// Deliberately no caller-supplied reference: every attempt that reaches
+				// this line has made, or is about to make, a real billable call to the
+				// provider, so every attempt is a real charge. A retry only happens
+				// because the node failed, and re-running it synthesises the audio
+				// again — deduplicating those would bill one call and make two.
+				//
+				// `context.stepSeq` in particular must NOT be used here. It is not
+				// unique within a run: `runToolNode` passes 0 for every graph tool node
+				// and `runToolLoop` restarts it per invocation, so a flow with a `tts`
+				// node inside a loop would collide on one reference and be charged once
+				// for twenty-five syntheses.
 			)
 
 			const attachment = await attachmentService.upload(

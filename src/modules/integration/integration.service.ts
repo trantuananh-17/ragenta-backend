@@ -97,6 +97,22 @@ export const integrationService = {
 				"Web search uses the connection a platform administrator configured. A workspace cannot bring its own yet.",
 			)
 		}
+		// `email` is refused for a workspace for a sharper reason: an email
+		// connection carries no transport of its own. `send_email` delivers through
+		// `env.smtp` — the operator's mail server, and their sending domain — and
+		// the connection contributes only the recipient allowlist.
+		//
+		// So a workspace-owned one would let a workspace admin widen that allowlist
+		// to `*@anywhere.com` and relay mail from the operator's domain to whoever
+		// they chose. That allowlist is the whole of ADR-032's bound on `send_email`,
+		// and until now only a platform administrator could set it. Owning the
+		// recipient list without owning the transport is not a tenant's decision to
+		// make.
+		if (organizationId !== null && input.kind === "email") {
+			throw new ValidationError(
+				"Email is sent through the deployment's own mail server, so its allowed recipients are set by a platform administrator. A workspace cannot bring its own yet.",
+			)
+		}
 
 		const id = rowId(organizationId, name)
 		const owner = await integrationRepository.findOwner(id)

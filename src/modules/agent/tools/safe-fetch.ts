@@ -195,6 +195,16 @@ export async function safeFetch(
 	const timeout = AbortSignal.timeout(TIMEOUT_MS)
 	const combined = signal ? AbortSignal.any([signal, timeout]) : timeout
 
+	const origin = current.origin
+	// Caller headers carry credentials: `api_call` puts a decrypted connection
+	// secret in `Authorization`, and so does a connection check. They are sent to
+	// the origin the caller named and to no other, because a redirect is chosen by
+	// whoever answered — and an open redirect on the connection's own host is
+	// otherwise a way to post that secret to an attacker's server. Browsers strip
+	// credentials across origins for this exact reason; there is no reason to be
+	// laxer here, where the header is a customer's key.
+	let carryHeaders = true
+
 	for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
 		if (current.protocol !== "http:" && current.protocol !== "https:") {
 			throw new ValidationError("Only http and https URLs can be fetched.")
@@ -209,9 +219,9 @@ export async function safeFetch(
 			headers: {
 				// Sent so an operator reading their logs can see what this is.
 				"user-agent": "Ragenta-Agent/1.0",
-				...options.headers,
+				...(carryHeaders ? options.headers : undefined),
 			},
-			body: options.body,
+			body: carryHeaders ? options.body : undefined,
 			signal: combined,
 		})
 
@@ -219,6 +229,10 @@ export async function safeFetch(
 			const location = response.headers.get("location")
 			if (!location) return await read(response, current.toString())
 			current = new URL(location, current)
+			// Once, and it never comes back: a redirect chain that returns to the
+			// original origin does not restore the credential, because the hop that
+			// left it already told someone else where to send us.
+			if (current.origin !== origin) carryHeaders = false
 			continue
 		}
 

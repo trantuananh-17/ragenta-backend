@@ -210,16 +210,16 @@ export const speechService = {
 	 * to forget the credit check.
 	 */
 	/**
-	 * `reference` lets a caller that has a stable identity for this synthesis
-	 * supply one, so a repeat of the *same* call is deduplicated by
-	 * `usage_ledger.reference`'s unique index.
+	 * `reference` is accepted for a caller that genuinely has a stable identity
+	 * for one synthesis, but there is no such caller today and the default is the
+	 * right answer for both of them.
 	 *
-	 * An agent step has such an identity — run plus step number — and needs it: a
-	 * `tts` node with a retry policy, or one replayed after a crash, would
-	 * otherwise charge again for every attempt, because the generated fallback
-	 * below is a new id each time. An HTTP caller has no such identity and keeps
-	 * the fallback, which is correct for it: the same text spoken twice from the
-	 * composer is two synthesies and two charges.
+	 * Every call that gets past the credit check makes a real, billable request to
+	 * the provider, so every call is a real charge: the same text spoken twice
+	 * from the composer is two syntheses, and a `tts` node retried after a failure
+	 * synthesised the audio twice. Deduplicating either would bill one call and
+	 * make two. A caller passing a reference here is asserting that its repeats
+	 * are the *same* provider call, not merely the same text.
 	 */
 	async synthesize(
 		workspaceId: string,
