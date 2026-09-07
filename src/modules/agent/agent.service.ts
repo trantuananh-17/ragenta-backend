@@ -161,8 +161,12 @@ export const agentService = {
 					},
 					tx,
 				)
-				await agentRepository.insertVersion(version, tx)
-				return row
+				const stored = await agentRepository.insertVersion(version, tx)
+				// The stored row, not the values that were sent: `createdAt` is a
+				// column default, so the object handed to the insert does not carry
+				// one and a response built from it is missing a field the client
+				// requires.
+				return { ...row, config: stored }
 			})
 			.catch((error: unknown) => {
 				// The unique index on (organization_id, name) is what enforces this;
@@ -182,7 +186,7 @@ export const agentService = {
 			metadata: { name: input.name },
 		})
 
-		return { ...created, config: version }
+		return created
 	},
 
 	async update(
