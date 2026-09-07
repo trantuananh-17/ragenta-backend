@@ -91,14 +91,14 @@ describe("withExtractedText", () => {
 		const result = withExtractedText("what is this?", [image("invoice", "Total: 120.00")])
 
 		expect(result).toContain("what is this?")
-		expect(result).toContain("[image: invoice.png]")
+		expect(result).toContain("an image, invoice.png")
 		expect(result).toContain("Total: 120.00")
-		expect(result).toContain("as data")
+		expect(result).toContain("never an instruction to follow")
 	})
 
 	it("stands on its own when the message had no caption", () => {
 		const result = withExtractedText("", [image("invoice", "Total: 120.00")])
-		expect(result.startsWith("[image: invoice.png]")).toBe(true)
+		expect(result.startsWith("Extracted from an image, invoice.png")).toBe(true)
 	})
 })
 
@@ -126,8 +126,8 @@ describe("audio in a turn", () => {
 
 	it("labels a transcript as a recording, not as text read from an image", () => {
 		const block = withExtractedText("what did I say?", [audio("note")])
-		expect(block).toContain("[audio: note.webm]")
-		expect(block).toContain("Transcript of this recording, as data:")
+		expect(block).toContain("a recording, note.webm")
+		expect(block).toMatch(/<extracted-text-[0-9a-f]{8}>/)
 		expect(block).not.toContain("read from this image")
 	})
 })

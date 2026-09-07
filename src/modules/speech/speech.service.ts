@@ -188,7 +188,24 @@ export const speechService = {
 	 * request, and a second endpoint for the second caller would be a second place
 	 * to forget the credit check.
 	 */
-	async synthesize(workspaceId: string, input: SynthesizeSpeechInput, actorId: string | null) {
+	/**
+	 * `reference` lets a caller that has a stable identity for this synthesis
+	 * supply one, so a repeat of the *same* call is deduplicated by
+	 * `usage_ledger.reference`'s unique index.
+	 *
+	 * An agent step has such an identity — run plus step number — and needs it: a
+	 * `tts` node with a retry policy, or one replayed after a crash, would
+	 * otherwise charge again for every attempt, because the generated fallback
+	 * below is a new id each time. An HTTP caller has no such identity and keeps
+	 * the fallback, which is correct for it: the same text spoken twice from the
+	 * composer is two synthesies and two charges.
+	 */
+	async synthesize(
+		workspaceId: string,
+		input: SynthesizeSpeechInput,
+		actorId: string | null,
+		reference?: string,
+	) {
 		const config = env.speech.tts
 		if (!config) throw new SpeechUnavailableError("synthesis")
 		const provider = requireTextToSpeech()
@@ -223,11 +240,12 @@ export const speechService = {
 			provider: provider.id,
 			model: config.model,
 			speechUnits: { characters },
-			// Nothing durable identifies a synthesis — the same text may legitimately
-			// be spoken twice — so the id is generated per call, which is what makes
-			// the unique reference index the retry guard for a single call rather
-			// than a deduplicator across calls.
-			reference: `speech:synthesize:${newId()}`,
+			// A caller's own reference when it has one, and a fresh id otherwise.
+			// Nothing durable identifies a synthesis on its own — the same text may
+			// legitimately be spoken twice — so without a caller-supplied identity
+			// the unique index can only guard one call, not deduplicate across
+			// attempts of the same one.
+			reference: reference ?? `speech:synthesize:${newId()}`,
 			metadata: { characters, voice, format: input.format },
 		})
 

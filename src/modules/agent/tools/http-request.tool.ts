@@ -2,6 +2,7 @@ import { z } from "zod"
 
 import { isAppError } from "../../../shared/errors"
 import { htmlToText } from "./html-text"
+import { renderFileText } from "./image-content"
 import { safeFetch } from "./safe-fetch"
 import type { AgentTool, ToolContext, ToolResult } from "./types"
 

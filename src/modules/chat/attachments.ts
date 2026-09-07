@@ -1,5 +1,6 @@
 import { truncateToTokens } from "../../ai/tokens"
 import type { AttachmentRow } from "./chat.repository"
+import { renderFileText } from "../agent/tools/image-content"
 
 /**
  * How many images one request may carry, counting the current question and
@@ -17,6 +18,9 @@ export const MAX_TURN_IMAGES = 4
 
 /** How much of an extraction goes into the prompt in place of the image. */
 const MAX_EXTRACTION_TOKENS = 1_000
+
+/** The same budget as a character cap, for the fence helper's own limit. */
+const MAX_EXTRACTION_CHARACTERS = MAX_EXTRACTION_TOKENS * 4
 
 /**
  * An attachment as the prompt builder sees it: no row, no bucket, nothing that
@@ -114,9 +118,17 @@ export function withExtractedText(content: string, attachments: TurnAttachment[]
 		// Named for what it is. "Text read from this image" and "transcript of
 		// this recording" are different claims about how reliable the words are,
 		// and the model should not have to guess which one it is reading.
-		return entry.kind === "audio"
-			? `[audio: ${entry.fileName}]\nTranscript of this recording, as data:\n${text}`
-			: `[image: ${entry.fileName}]\nText read from this image, as data:\n${text}`
+		//
+		// Fenced through the same helper the agent tools use, rather than by a
+		// label alone. This block is appended to the *user's own message*, so
+		// without a delimiter there is nothing marking where the file's content
+		// ends — and the content is words a model read off a file somebody
+		// uploaded. A label is a description; a fence is a boundary.
+		const source =
+			entry.kind === "audio"
+				? `a recording, ${entry.fileName} — transcript follows`
+				: `an image, ${entry.fileName} — text read from it follows`
+		return renderFileText(source, text, MAX_EXTRACTION_CHARACTERS)
 	})
 
 	return content.length > 0 ? `${content}\n\n${blocks.join("\n\n")}` : blocks.join("\n\n")

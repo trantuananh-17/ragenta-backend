@@ -66,6 +66,12 @@ export const speechSynthesizeTool: AgentTool = {
 				context.workspaceId,
 				{ text: input.text, voice: input.voice, format: SYNTHESIS_FORMAT },
 				context.userId,
+				// A stable identity for *this* step of *this* run, so a retry policy or
+				// a replay after a crash lands on the reference it already had and the
+				// unique index refuses the second charge. Its own namespace, because
+				// the runner's own step charges use `agent-run:{runId}:step:{seq}` and
+				// two different charges must never collide on one reference.
+				`speech:synthesize:${context.runId}:${context.stepSeq}`,
 			)
 
 			const attachment = await attachmentService.upload(

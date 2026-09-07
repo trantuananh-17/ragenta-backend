@@ -122,6 +122,11 @@ export async function* runGraph(
 	 * is the same `executions` every other node increments.
 	 */
 	context.remainingExecutions = () => Math.max(MAX_NODE_EXECUTIONS - executions, 0)
+	// Handed to the nodes for the same reason the budget is: the `while` below
+	// checks it between nodes, and a `loop` is one node containing many
+	// executions. Without this a Stop, or a spent credit ceiling, would go
+	// unnoticed until the whole list had run.
+	context.shouldStop = options.isStopped
 	context.runBody = async function* runBody(bodyNodeId) {
 		const body = graph.nodes[bodyNodeId]
 		if (!body) {

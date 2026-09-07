@@ -77,6 +77,16 @@ export interface NodeContext {
 	 * given one refuses rather than half-working.
 	 */
 	runBody?(bodyNodeId: string): AsyncGenerator<NodeEvent, NodeOutput>
+	/**
+	 * Whether the run should stop now — a person pressed Stop, or the credit
+	 * ceiling is spent.
+	 *
+	 * The engine consults this between nodes. A `loop` runs many body executions
+	 * inside a single node, so without it a stop or an exhausted ceiling would not
+	 * be noticed until the whole list had run — which is how a flow spends several
+	 * times its ceiling after being told to stop.
+	 */
+	shouldStop?(): Promise<boolean>
 	/** What is left of the run-wide node budget. Also installed by the engine. */
 	remainingExecutions?(): number
 }
@@ -733,8 +743,22 @@ const loopNode: NodeImplementation = {
 		})
 
 		const outputs: string[] = []
+		let halted = false
 		try {
 			for (let index = 0; index < planned; index += 1) {
+				// Checked every iteration, not once before the first.
+				//
+				// The engine consults this between nodes, and a loop is one node that
+				// may run twenty-five of them. Without this check a Stop pressed on
+				// iteration two kept calling the provider for another twenty-three, and
+				// a credit ceiling crossed part-way through was not noticed until the
+				// whole list had run — so a flow could spend several times its ceiling
+				// after being told to stop. An iteration boundary is a node boundary,
+				// which is exactly where ADR-028 says it is safe to stop.
+				if (context.shouldStop && (await context.shouldStop())) {
+					halted = true
+					break
+				}
 				// The body reads its item out of the run's own value scope, so it is an
 				// ordinary node that knows nothing about being looped over. Mutated in
 				// place rather than replaced: the engine holds a reference to this
@@ -755,9 +779,14 @@ const loopNode: NodeImplementation = {
 		const truncated = planned < items.length
 		const text = [
 			outputs.join("\n\n"),
-			truncated
-				? `[The list had ${items.length} items and this flow ran the first ${planned}.]`
-				: "",
+			// Said out loud rather than left to be inferred from a short list: an
+			// answer built from four of twenty-five invoices is not a wrong answer,
+			// but it is a different one, and only this line says so.
+			halted
+				? `[Stopped after ${outputs.length} of ${items.length} items — the run was cancelled or reached its credit ceiling.]`
+				: truncated
+					? `[The list had ${items.length} items and this flow ran the first ${planned}.]`
+					: "",
 		]
 			.filter(Boolean)
 			.join("\n\n")
