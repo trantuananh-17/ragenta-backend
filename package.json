@@ -24,6 +24,7 @@
     "bullmq": "^5.63.0",
     "dotenv": "^17.3.1",
     "drizzle-orm": "^0.45.2",
+    "exceljs": "^4.4.0",
     "hono": "^4.12.25",
     "ioredis": "^5.9.0",
     "mammoth": "^1.12.2",

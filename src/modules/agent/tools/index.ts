@@ -3,6 +3,8 @@ import { z } from "zod"
 import type { ToolDefinition } from "../../../ai/clients"
 import type { CitationCollector } from "../citations"
 import { apiCallTool } from "./api-call.tool"
+import { browserReadTool } from "./browser.tool"
+import { excelReadTool, excelWriteTool } from "./excel.tool"
 import { httpRequestTool } from "./http-request.tool"
 import { imageOcrTool } from "./image-ocr.tool"
 import { imageVisionTool } from "./image-vision.tool"
@@ -35,6 +37,9 @@ export const TOOL_IDS = [
 	"image_vision",
 	"speech_transcribe",
 	"speech_synthesize",
+	"excel_read",
+	"excel_write",
+	"browser_read",
 ] as const
 export type ToolId = (typeof TOOL_IDS)[number]
 
@@ -130,6 +135,27 @@ export const TOOL_CATALOGUE: Record<
 		writes: false,
 		requires: null,
 	},
+	excel_read: {
+		title: "Read a spreadsheet",
+		description:
+			"Read an .xlsx attachment as rows the agent can quote and reason over. Long sheets are truncated, and the agent is told when they were.",
+		writes: false,
+		requires: null,
+	},
+	excel_write: {
+		title: "Create a spreadsheet",
+		description:
+			"Build an .xlsx file from rows the agent produces and save it as a new file attachment, returning its id.",
+		writes: false,
+		requires: null,
+	},
+	browser_read: {
+		title: "Open a page in a browser",
+		description:
+			"Render a page in a real browser and read it, for sites a plain fetch returns empty. Reading only — it cannot click or type. Needs a browser service configured for the deployment.",
+		writes: false,
+		requires: null,
+	},
 }
 
 /** Whether a tool changes something outside Ragenta. */
@@ -170,6 +196,15 @@ export function toolsFor(
 		// (`speech-transcribe.tool.ts`).
 		if (id === "speech_transcribe") tools.push(speechTranscribeTool)
 		if (id === "speech_synthesize") tools.push(speechSynthesizeTool)
+		// Same argument again: the model names a spreadsheet, and `excel_read`
+		// resolves it through `findOrFail(workspaceId, …)` (`excel.tool.ts`).
+		if (id === "excel_read") tools.push(excelReadTool)
+		if (id === "excel_write") tools.push(excelWriteTool)
+		// The one tool here whose target is neither a knowledge base nor an
+		// attachment but an arbitrary URL the model chose. Its guard is the address
+		// check, and what that guard does not cover is written out in
+		// `browser.tool.ts`.
+		if (id === "browser_read") tools.push(browserReadTool)
 	}
 	return tools
 }

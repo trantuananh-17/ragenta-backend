@@ -1,6 +1,7 @@
 import { z } from "zod"
 
 import { isAppError } from "../../../shared/errors"
+import { htmlToText } from "./html-text"
 import { safeFetch } from "./safe-fetch"
 import type { AgentTool, ToolContext, ToolResult } from "./types"
 
@@ -20,9 +21,9 @@ const MAX_CONTENT = 8_000
  * is the tool's contract with the model, that one is the security boundary, and
  * mixing them is how a later edit quietly removes a check.
  *
- * HTML is reduced to text before the model sees it. A page's markup is most of
- * its bytes and none of its meaning, and a run that spent its context window on
- * `<div class="...">` would be paying for nothing.
+ * HTML is reduced to text before the model sees it, by the same helper the
+ * browser tool uses — a page's markup is most of its bytes and none of its
+ * meaning.
  */
 export const httpRequestTool: AgentTool = {
 	name: "http_request",
@@ -41,7 +42,7 @@ export const httpRequestTool: AgentTool = {
 			)
 
 			const text = response.contentType.includes("html")
-				? stripHtml(response.body)
+				? htmlToText(response.body)
 				: response.body
 
 			const clipped = text.slice(0, MAX_CONTENT)
@@ -76,19 +77,4 @@ export const httpRequestTool: AgentTool = {
 			}
 		}
 	},
-}
-
-/** Enough to turn a page into readable text. Not a parser, and not trying to be. */
-function stripHtml(html: string): string {
-	return html
-		.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-		.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
-		.replace(/<[^>]+>/g, " ")
-		.replace(/&nbsp;/g, " ")
-		.replace(/&amp;/g, "&")
-		.replace(/&lt;/g, "<")
-		.replace(/&gt;/g, ">")
-		.replace(/&quot;/g, '"')
-		.replace(/\s+/g, " ")
-		.trim()
 }

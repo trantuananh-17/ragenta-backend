@@ -51,6 +51,17 @@ function isBlockedIpv6(address: string): boolean {
 	// An IPv4-mapped address reaches the same host by another spelling.
 	const mapped = value.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/)
 	if (mapped?.[1]) return isBlockedIpv4(mapped[1])
+
+	// And by a third: `new URL()` rewrites `[::ffff:127.0.0.1]` into the hex form
+	// `::ffff:7f00:1`, so anything reading a hostname off a parsed URL never sees
+	// the dotted spelling above.
+	const mappedHex = value.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+	if (mappedHex?.[1] && mappedHex[2]) {
+		const high = Number.parseInt(mappedHex[1], 16)
+		const low = Number.parseInt(mappedHex[2], 16)
+		return isBlockedIpv4(`${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`)
+	}
+
 	return false
 }
 
@@ -65,8 +76,12 @@ export function isBlockedAddress(address: string): boolean {
  * Every address the hostname resolves to must be allowed, not merely the first.
  * A name resolving to one public and one private address would otherwise be a
  * coin toss decided by whichever the connection happened to use.
+ *
+ * Exported because the browser tool sends its URL to a remote browser service
+ * rather than fetching it here, and has to apply the same check first — a second
+ * implementation of it would be a second place to get it wrong.
  */
-async function assertHostAllowed(hostname: string): Promise<void> {
+export async function assertHostAllowed(hostname: string): Promise<void> {
 	if (isIP(hostname)) {
 		if (isBlockedAddress(hostname)) {
 			throw new ValidationError("That address is not reachable from this service.")
@@ -148,14 +163,25 @@ export async function safeFetch(
 	throw new ValidationError("That URL redirected too many times.")
 }
 
-/** Reads at most `MAX_BYTES`, so a huge response cannot exhaust the process. */
 async function read(response: Response, finalUrl: string): Promise<SafeFetchResult> {
 	const contentType = response.headers.get("content-type") ?? ""
-	const reader = response.body?.getReader()
+	const { body, truncated } = await readCappedText(response, MAX_BYTES)
+	return { status: response.status, contentType, body, truncated, finalUrl }
+}
 
-	if (!reader) {
-		return { status: response.status, contentType, body: "", truncated: false, finalUrl }
-	}
+/**
+ * Reads at most `maxBytes` of a response, so a huge one cannot exhaust the
+ * process. Exported because the browser tool talks to its service directly —
+ * that endpoint is an operator's, not the model's, so it does not go through
+ * `safeFetch`, but a rendered page is exactly the response that arrives
+ * unbounded.
+ */
+export async function readCappedText(
+	response: Response,
+	maxBytes: number,
+): Promise<{ body: string; truncated: boolean }> {
+	const reader = response.body?.getReader()
+	if (!reader) return { body: "", truncated: false }
 
 	const decoder = new TextDecoder()
 	let body = ""
@@ -163,12 +189,12 @@ async function read(response: Response, finalUrl: string): Promise<SafeFetchResu
 	let truncated = false
 
 	try {
-		while (bytes < MAX_BYTES) {
+		while (bytes < maxBytes) {
 			const { done, value } = await reader.read()
 			if (done) break
 			bytes += value.byteLength
 			body += decoder.decode(value, { stream: true })
-			if (bytes >= MAX_BYTES) truncated = true
+			if (bytes >= maxBytes) truncated = true
 		}
 	} finally {
 		await reader.cancel().catch(() => {
@@ -176,5 +202,5 @@ async function read(response: Response, finalUrl: string): Promise<SafeFetchResu
 		})
 	}
 
-	return { status: response.status, contentType, body, truncated, finalUrl }
+	return { body, truncated }
 }

@@ -99,6 +99,23 @@ const envSchema = z.object({
 	/** Required with the rest: voice ids are server-specific and none can be guessed. */
 	SPEECH_TTS_VOICE: z.string().optional(),
 
+	/**
+	 * A remote browser service, spoken to over plain HTTP in the browserless
+	 * REST shape (`POST /content`, `POST /scrape`). Optional, and the browser
+	 * tool refuses clearly when it is unset.
+	 *
+	 * Remote rather than in-process on purpose: Ragenta deploys as Docker
+	 * Compose on small VMs (ADR-008), and bundling Chromium into the API image
+	 * would multiply its size and its memory floor for a tool that is the
+	 * fallback after an API, not the first choice.
+	 *
+	 * The token is optional because a browserless container on the compose
+	 * network may run without one; a service exposed beyond that network must
+	 * set it.
+	 */
+	BROWSER_BASE_URL: z.url().optional(),
+	BROWSER_TOKEN: z.string().optional(),
+
 	SMTP_HOST: z.string().optional(),
 	SMTP_PORT: z.coerce.number().int().positive().default(587),
 	SMTP_USER: z.string().optional(),
@@ -264,6 +281,10 @@ export const env = {
 					}
 				: undefined,
 	},
+
+	browser: raw.BROWSER_BASE_URL
+		? { baseUrl: raw.BROWSER_BASE_URL, token: raw.BROWSER_TOKEN || undefined }
+		: undefined,
 
 	providerKeys: {
 		openai: raw.OPENAI_API_KEY,
