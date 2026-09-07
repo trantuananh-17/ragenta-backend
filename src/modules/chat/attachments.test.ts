@@ -9,7 +9,12 @@ import type { TurnAttachment } from "./attachments"
  * is which images a follow-up pays for a second time.
  */
 function image(id: string, extractedText: string | null = null): TurnAttachment {
-	return { id, fileName: `${id}.png`, mimeType: "image/png", extractedText }
+	return { id, fileName: `${id}.png`, mimeType: "image/png", kind: "image", extractedText }
+}
+
+/** A recording never travels as bytes, so it is only ever its transcript. */
+function audio(id: string, extractedText: string | null = "spoken words"): TurnAttachment {
+	return { id, fileName: `${id}.webm`, mimeType: "audio/webm", kind: "audio", extractedText }
 }
 
 const ids = (entries: TurnAttachment[]): string[] => entries.map((entry) => entry.id)
@@ -94,5 +99,35 @@ describe("withExtractedText", () => {
 	it("stands on its own when the message had no caption", () => {
 		const result = withExtractedText("", [image("invoice", "Total: 120.00")])
 		expect(result.startsWith("[image: invoice.png]")).toBe(true)
+	})
+})
+
+describe("audio in a turn", () => {
+	it("never competes for an image slot, however many images there are", () => {
+		const images = Array.from({ length: MAX_TURN_IMAGES }, (_, index) => image(`i${index}`))
+		const plan = planTurnImages([...images, audio("note")], [])
+
+		expect(ids(plan.inline)).toEqual(ids(images))
+		expect(ids(plan.transcribed)).toEqual(["note"])
+		expect(plan.dropped).toEqual([])
+	})
+
+	it("carries a recording from this turn as its transcript, not as bytes", () => {
+		const plan = planTurnImages([audio("note")], [])
+		expect(plan.inline).toEqual([])
+		expect(ids(plan.transcribed)).toEqual(["note"])
+	})
+
+	it("drops a recording that was never transcribed rather than sending a filename", () => {
+		const plan = planTurnImages([audio("note", null)], [])
+		expect(plan.inline).toEqual([])
+		expect(plan.transcribed).toEqual([])
+	})
+
+	it("labels a transcript as a recording, not as text read from an image", () => {
+		const block = withExtractedText("what did I say?", [audio("note")])
+		expect(block).toContain("[audio: note.webm]")
+		expect(block).toContain("Transcript of this recording, as data:")
+		expect(block).not.toContain("read from this image")
 	})
 })

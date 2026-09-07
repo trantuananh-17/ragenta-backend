@@ -168,6 +168,7 @@ function toTurnAttachment(row: AttachmentRow): TurnAttachment {
 		id: row.id,
 		fileName: row.fileName,
 		mimeType: row.mimeType,
+		kind: row.kind,
 		extractedText: text ? text : null,
 	}
 }
@@ -500,9 +501,18 @@ export const chatService = {
 		)
 
 		for (const row of rows) {
-			if (row.kind !== "image") {
+			if (row.kind !== "image" && row.kind !== "audio") {
 				throw new ValidationError(
-					`"${row.fileName}" is not an image. Only images can be attached to a message.`,
+					`"${row.fileName}" cannot be attached to a message. Attach an image or a recording.`,
+				)
+			}
+			// A recording reaches the model as its transcript — no chat adapter here
+			// takes audio on the wire — so one that has not been transcribed would
+			// arrive as a filename and nothing else. Refusing is better than
+			// answering about a recording the model never heard.
+			if (row.kind === "audio" && !row.extracted?.text?.trim()) {
+				throw new ValidationError(
+					`"${row.fileName}" has not been transcribed yet. Transcribe it before sending it.`,
 				)
 			}
 			if (row.messageId) {
@@ -511,6 +521,12 @@ export const chatService = {
 				)
 			}
 		}
+
+		// Only images need a model that can see. A turn carrying nothing but a
+		// voice note is ordinary text by the time it reaches the provider, and
+		// refusing it for want of vision would be refusing a feature it does not
+		// use.
+		if (!rows.some((row) => row.kind === "image")) return rows
 
 		const definition = await findCatalogueModel(selection.provider, selection.model)
 		// Two separate things, and both have to be true: the model has to be able
@@ -719,7 +735,9 @@ export const chatService = {
 
 		const historyRows = (
 			await chatRepository.listAttachmentsForMessages(workspaceId, historyMessageIds)
-		).filter((row) => row.kind === "image" && row.status === "ready")
+		).filter(
+			(row) => (row.kind === "image" || row.kind === "audio") && row.status === "ready",
+		)
 		if (turn.attachments.length === 0 && historyRows.length === 0) return empty
 
 		const plan = planTurnImages(

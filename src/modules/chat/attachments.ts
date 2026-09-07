@@ -27,7 +27,12 @@ export interface TurnAttachment {
 	id: string
 	fileName: string
 	mimeType: string
-	/** The OCR/vision result, when one has already been produced for this image. */
+	/** image | audio | file. Decides whether bytes can be sent at all. */
+	kind: string
+	/**
+	 * The OCR/vision result for an image, or the transcript for a recording —
+	 * whichever has already been produced for this file.
+	 */
 	extractedText: string | null
 }
 
@@ -68,10 +73,21 @@ export function planTurnImages(
 	history: TurnAttachment[],
 	limit: number = MAX_TURN_IMAGES,
 ): ImagePlan {
-	const transcribed = history.filter((entry) => entry.extractedText !== null)
+	// Only an image can be sent as bytes. No chat model in this deployment takes
+	// audio on the wire — a recording reaches the model as its transcript or not
+	// at all — so audio never competes for an image slot, whether it is from this
+	// turn or an earlier one.
+	const spoken = [...history, ...current].filter((entry) => entry.kind !== "image")
+	const currentImages = current.filter((entry) => entry.kind === "image")
+	const historyImages = history.filter((entry) => entry.kind === "image")
+
+	const transcribed = [
+		...historyImages.filter((entry) => entry.extractedText !== null),
+		...spoken.filter((entry) => entry.extractedText !== null),
+	]
 	const candidates = [
-		...history.filter((entry) => entry.extractedText === null),
-		...current,
+		...historyImages.filter((entry) => entry.extractedText === null),
+		...currentImages,
 	]
 
 	const keep = Math.max(0, limit)
@@ -95,7 +111,12 @@ export function withExtractedText(content: string, attachments: TurnAttachment[]
 
 	const blocks = attachments.map((entry) => {
 		const text = truncateToTokens(entry.extractedText ?? "", MAX_EXTRACTION_TOKENS)
-		return `[image: ${entry.fileName}]\nText read from this image, as data:\n${text}`
+		// Named for what it is. "Text read from this image" and "transcript of
+		// this recording" are different claims about how reliable the words are,
+		// and the model should not have to guess which one it is reading.
+		return entry.kind === "audio"
+			? `[audio: ${entry.fileName}]\nTranscript of this recording, as data:\n${text}`
+			: `[image: ${entry.fileName}]\nText read from this image, as data:\n${text}`
 	})
 
 	return content.length > 0 ? `${content}\n\n${blocks.join("\n\n")}` : blocks.join("\n\n")
