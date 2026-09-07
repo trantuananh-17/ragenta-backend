@@ -37,30 +37,95 @@ function isBlockedIpv4(address: string): boolean {
 	if (a === 172 && b >= 16 && b <= 31) return true
 	if (a === 192 && b === 168) return true
 	if (a === 192 && b === 0) return true // IETF protocol assignments
+	if (a === 192 && b === 88) return true // 192.88.99.0/24 6to4 relay anycast
 	if (a === 100 && b >= 64 && b <= 127) return true // carrier-grade NAT
+	if (a === 198 && (b === 18 || b === 19)) return true // benchmarking
+	if (a === 198 && b === 51) return true // TEST-NET-2
+	if (a === 203 && b === 0) return true // TEST-NET-3
 	if (a >= 224) return true // multicast and reserved
 	return false
 }
 
-function isBlockedIpv6(address: string): boolean {
-	const value = address.toLowerCase().replace(/^\[|\]$/g, "")
-	if (value === "::" || value === "::1") return true
-	if (value.startsWith("fe80")) return true // link-local
-	if (value.startsWith("fc") || value.startsWith("fd")) return true // unique local
-	if (value.startsWith("ff")) return true // multicast
-	// An IPv4-mapped address reaches the same host by another spelling.
-	const mapped = value.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/)
-	if (mapped?.[1]) return isBlockedIpv4(mapped[1])
+/**
+ * IPv6, decided on the bytes rather than on how the address was spelled.
+ *
+ * String prefixes were wrong in both directions and quietly. `startsWith("fe80")`
+ * covers `fe80::/16` while link-local is `fe80::/10`, so `fe90::1` and `febf::1`
+ * were allowed. `new URL()` rewrites `[::ffff:127.0.0.1]` to the hex form
+ * `::ffff:7f00:1`, and `[::127.0.0.1]` to `::7f00:1`, and neither matched a
+ * regex written for the dotted one. There are at least four ways to write
+ * loopback and five to reach 169.254.169.254, and a check that enumerates
+ * spellings will always be one spelling behind.
+ *
+ * So the address is expanded to its sixteen bytes once, and every rule is a
+ * prefix comparison on those bytes. `::ffff:a.b.c.d`, `::a.b.c.d`,
+ * `64:ff9b::a.b.c.d` (NAT64) and `2002:a.b.c.d::` (6to4) all carry an IPv4
+ * address inside them and are handed to the IPv4 rules, because each of them
+ * reaches an IPv4 host on a network that offers the translation.
+ */
+function expandIpv6(address: string): number[] | null {
+	const value = address.toLowerCase().replace(/^\[|\]$/g, "").split("%")[0] ?? ""
+	const [head = "", tail, extra] = value.split("::")
+	if (extra !== undefined) return null
 
-	// And by a third: `new URL()` rewrites `[::ffff:127.0.0.1]` into the hex form
-	// `::ffff:7f00:1`, so anything reading a hostname off a parsed URL never sees
-	// the dotted spelling above.
-	const mappedHex = value.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
-	if (mappedHex?.[1] && mappedHex[2]) {
-		const high = Number.parseInt(mappedHex[1], 16)
-		const low = Number.parseInt(mappedHex[2], 16)
-		return isBlockedIpv4(`${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`)
+	// A trailing dotted quad — `::ffff:127.0.0.1` — is four more bytes, not a group.
+	const toGroups = (part: string): number[] | null => {
+		if (part === "") return []
+		const groups: number[] = []
+		for (const piece of part.split(":")) {
+			if (piece.includes(".")) {
+				const quad = piece.split(".").map(Number)
+				if (quad.length !== 4 || quad.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) {
+					return null
+				}
+				groups.push(((quad[0] ?? 0) << 8) | (quad[1] ?? 0), ((quad[2] ?? 0) << 8) | (quad[3] ?? 0))
+				continue
+			}
+			if (!/^[0-9a-f]{1,4}$/.test(piece)) return null
+			groups.push(Number.parseInt(piece, 16))
+		}
+		return groups
 	}
+
+	const left = toGroups(head)
+	const right = tail === undefined ? [] : toGroups(tail)
+	if (!left || !right) return null
+
+	const missing = 8 - left.length - right.length
+	if (tail === undefined ? missing !== 0 : missing < 0) return null
+	const groups = [...left, ...Array<number>(tail === undefined ? 0 : missing).fill(0), ...right]
+	if (groups.length !== 8) return null
+
+	return groups.flatMap((group) => [(group >> 8) & 0xff, group & 0xff])
+}
+
+function isBlockedIpv6(address: string): boolean {
+	const bytes = expandIpv6(address)
+	// Unparseable is refused, not allowed. A spelling this cannot read is a
+	// spelling whose destination is unknown, and the safe answer to that is no.
+	if (!bytes) return true
+
+	const starts = (...prefix: number[]) => prefix.every((byte, index) => bytes[index] === byte)
+	const asIpv4 = (offset: number) =>
+		isBlockedIpv4(`${bytes[offset]}.${bytes[offset + 1]}.${bytes[offset + 2]}.${bytes[offset + 3]}`)
+
+	if (bytes.every((byte) => byte === 0)) return true // ::
+	if (bytes.slice(0, 15).every((byte) => byte === 0) && bytes[15] === 1) return true // ::1
+
+	// fe80::/10 — link-local. The /10 is the reason this is a mask and not a
+	// prefix string: fe80 through febf are all link-local.
+	if (bytes[0] === 0xfe && ((bytes[1] ?? 0) & 0xc0) === 0x80) return true
+	if (bytes[0] === 0xfe && ((bytes[1] ?? 0) & 0xc0) === 0xc0) return true // fec0::/10 site-local
+	if (((bytes[0] ?? 0) & 0xfe) === 0xfc) return true // fc00::/7 unique local
+	if (bytes[0] === 0xff) return true // ff00::/8 multicast
+
+	// Every way of carrying an IPv4 address inside an IPv6 one.
+	if (starts(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff)) return asIpv4(12) // ::ffff:0:0/96
+	if (starts(0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0)) return asIpv4(12) // ::ffff:0:0:0/96 (SIIT)
+	if (starts(0, 0x64, 0xff, 0x9b)) return asIpv4(12) // 64:ff9b::/96 NAT64
+	if (starts(0x20, 0x02)) return asIpv4(2) // 2002::/16 6to4
+	// ::a.b.c.d — deprecated IPv4-compatible, still routable as the IPv4 host.
+	if (bytes.slice(0, 12).every((byte) => byte === 0)) return asIpv4(12)
 
 	return false
 }
