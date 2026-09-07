@@ -49,7 +49,7 @@ export const speechSynthesizeTool: AgentTool = {
 	async execute(context: ToolContext, args: unknown): Promise<ToolResult> {
 		const input = speechSynthesizeParameters.parse(args)
 
-		if (!isTextToSpeechConfigured()) {
+		if (!(await isTextToSpeechConfigured())) {
 			return {
 				ok: false,
 				content:
@@ -105,7 +105,7 @@ export const speechSynthesizeTool: AgentTool = {
 					mimeType: attachment.mimeType,
 					sizeBytes: attachment.sizeBytes,
 					characters: input.text.length,
-					voice: input.voice ?? defaultSpeechVoice() ?? null,
+					voice: input.voice ?? (await defaultSpeechVoice()) ?? null,
 					// Null, and stays null: nothing decodes the container to measure it,
 					// and a guessed duration would be a wrong number on the timeline
 					// (`attachment/validate.ts`).

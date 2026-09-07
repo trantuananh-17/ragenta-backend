@@ -4,9 +4,9 @@ import {
 	defaultSpeechVoice,
 	requireSpeechToText,
 	requireTextToSpeech,
+	resolvedSpeechEndpoint,
 } from "../../ai/speech"
 import type { SpeechResult } from "../../ai/speech"
-import { env } from "../../config/env"
 import { ConflictError, EntitlementError, ValidationError } from "../../shared/errors"
 import { newId } from "../../shared/id"
 import { logger } from "../../shared/logger"
@@ -105,9 +105,9 @@ export const speechService = {
 			throw new ConflictError("This recording is already being transcribed.")
 		}
 
-		const config = env.speech.stt
+		const config = await resolvedSpeechEndpoint("stt")
 		if (!config) throw new SpeechUnavailableError("transcription")
-		const provider = requireSpeechToText()
+		const provider = await requireSpeechToText()
 
 		const summary = await billingService.getSummary(workspaceId)
 		if (summary.credits.total < MINIMUM_TRANSCRIBE_CREDITS) {
@@ -227,11 +227,11 @@ export const speechService = {
 		actorId: string | null,
 		reference?: string,
 	) {
-		const config = env.speech.tts
+		const config = await resolvedSpeechEndpoint("tts")
 		if (!config) throw new SpeechUnavailableError("synthesis")
-		const provider = requireTextToSpeech()
+		const provider = await requireTextToSpeech()
 
-		const voice = input.voice ?? defaultSpeechVoice()
+		const voice = input.voice ?? (await defaultSpeechVoice())
 		if (!voice) throw new SpeechUnavailableError("synthesis")
 
 		// The exact cost is known before the call here — characters are counted, not

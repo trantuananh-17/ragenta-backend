@@ -7,6 +7,7 @@ import { promoController } from "../promo/promo.controller"
 import { integrationController } from "../integration/integration.controller"
 import { providerController } from "../provider/provider.controller"
 import { adminController } from "./admin.controller"
+import { speechAdminController } from "../speech/speech.admin.controller"
 
 /**
  * Platform administration. Cross-tenant by definition, so the gate is applied
@@ -50,6 +51,15 @@ adminRoutes.get("/integrations/:integrationId", integrationController.get)
 adminRoutes.put("/integrations/:integrationId", integrationController.save)
 adminRoutes.delete("/integrations/:integrationId", integrationController.remove)
 adminRoutes.post("/integrations/:integrationId/check", integrationController.check)
+
+// Transcription and synthesis. Separate from the model providers because they
+// are bought separately and configured separately: a deployment can transcribe
+// through one gateway and speak Vietnamese through a self-hosted container, and
+// neither half is a chat provider anyone picks a model from.
+adminRoutes.get("/speech", speechAdminController.get)
+adminRoutes.put("/speech/:capability", speechAdminController.save)
+adminRoutes.delete("/speech/:capability", speechAdminController.remove)
+adminRoutes.post("/speech/:capability/check", speechAdminController.check)
 
 adminRoutes.get("/settings/models", providerController.getDefaults)
 adminRoutes.put("/settings/models", providerController.setDefaults)

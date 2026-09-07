@@ -30,6 +30,7 @@ import {
 	setPlatformDefaultsSchema,
 	upsertModelSchema,
 } from "../modules/provider/provider.dto"
+import { saveSpeechEndpointSchema } from "../modules/speech/speech.admin.dto"
 import {
 	createPromoCodeSchema,
 	listPromoCodesQuerySchema,
@@ -694,6 +695,30 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 	},
 	"POST /v1/admin/providers/:provider/check": {
 		summary: "Call the provider with the stored key. Answers 200 with ok=false on rejection",
+		tags: ["Admin"],
+		access: "platform admin",
+	},
+	"GET /v1/admin/speech": {
+		summary:
+			"Transcription and synthesis configuration, and which source each half resolves from. The key is never returned — only its masked hint",
+		tags: ["Admin"],
+		access: "platform admin",
+	},
+	"PUT /v1/admin/speech/:capability": {
+		summary:
+			"Configure one half — `stt` or `tts` — against any OpenAI-audio-compatible host. Omitting apiKey keeps the stored one",
+		tags: ["Admin"],
+		access: "platform admin",
+		body: saveSpeechEndpointSchema,
+	},
+	"DELETE /v1/admin/speech/:capability": {
+		summary: "Clear one half, falling back to whatever the environment configures",
+		tags: ["Admin"],
+		access: "platform admin",
+	},
+	"POST /v1/admin/speech/:capability/check": {
+		summary:
+			"Transcribe a second of generated silence, or synthesise a short phrase. Answers 200 with ok=false on rejection",
 		tags: ["Admin"],
 		access: "platform admin",
 	},

@@ -29,7 +29,7 @@ export const speechTranscribeTool: AgentTool = {
 	async execute(context: ToolContext, args: unknown): Promise<ToolResult> {
 		const input = speechTranscribeParameters.parse(args)
 
-		if (!isSpeechToTextConfigured()) {
+		if (!(await isSpeechToTextConfigured())) {
 			return {
 				ok: false,
 				content:
