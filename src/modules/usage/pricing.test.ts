@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { PRICING_VERSION, priceSpeechUsage } from "./pricing"
+import { PRICING_VERSION, priceSpeechUsage } from "./credits"
 
 /**
  * Speech pricing arithmetic, which is the part of this feature that costs real
