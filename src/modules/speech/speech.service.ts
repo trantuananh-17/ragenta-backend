@@ -17,6 +17,7 @@ import { billingService } from "../billing/billing.service"
 import { priceSpeechUsage } from "../usage/pricing"
 import { usageService } from "../usage/usage.service"
 import { toTranscriptExtraction, toTranscriptResponse } from "./speech.dto"
+import { billableDuration } from "./duration"
 import type {
 	SynthesizeSpeechInput,
 	TranscribeAttachmentInput,
@@ -161,20 +162,40 @@ export const speechService = {
 			durationMs: durationSec === null ? null : Math.round(durationSec * 1_000),
 		})
 
-		// Charged on what the provider says it processed, never on a local guess: a
-		// server that reports no duration is one we have no billable measure from,
-		// and inventing one from the file size would bill compression ratios.
+		// Charged on what the provider says it processed, and on a size-derived
+		// floor when it says nothing. `verbose_json` is a request rather than a
+		// guarantee — a self-hosted server may answer plain `{ text }`, and
+		// OpenAI's own gpt-4o-transcribe refuses the format outright — and charging
+		// zero for those is not caution but unlimited free transcription against a
+		// real bill. The estimate is deliberately low (`duration.ts`) so the error
+		// is ours, and the row says which of the two it was.
+		const billable = billableDuration(durationSec, row.sizeBytes, row.mimeType)
+		if (billable.estimated) {
+			log.warn("speech.duration_estimated", {
+				attachmentId: row.id,
+				model: config.model,
+				sizeBytes: row.sizeBytes,
+				seconds: billable.seconds,
+			})
+		}
+
 		await usageService.recordAndCharge({
 			workspaceId,
 			userId: actorId,
 			operation: "speech",
 			provider: provider.id,
 			model: config.model,
-			speechUnits: { seconds: durationSec ?? 0 },
+			speechUnits: { seconds: billable.seconds },
 			// Stable per attachment, and the row is only reachable once because the
 			// extraction short-circuits every later call.
 			reference: `speech:transcribe:${row.id}`,
-			metadata: { attachmentId: row.id, seconds: durationSec, language: transcript.language },
+			metadata: {
+				attachmentId: row.id,
+				seconds: billable.seconds,
+				reportedSeconds: durationSec,
+				estimated: billable.estimated,
+				language: transcript.language,
+			},
 		})
 
 		return toTranscriptResponse(row.id, extraction, false)
