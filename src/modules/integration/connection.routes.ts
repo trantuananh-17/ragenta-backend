@@ -1,0 +1,47 @@
+import { Hono } from "hono"
+
+import { requireAuth } from "../../api/middleware/session"
+import { requireWorkspaceRole, workspaceScope } from "../../api/middleware/workspace-scope"
+import type { AppEnv } from "../../api/types"
+import { connectionController } from "./integration.controller"
+
+/**
+ * A workspace's own connections to outside systems.
+ *
+ * Every member can see which connections exist, because that is what someone
+ * configuring an agent's `api_call` tool has to know — and what they see is the
+ * masked hint, never a key. Creating, changing, deleting or testing one is a
+ * credential operation and a spending one: the test makes a live outbound call
+ * with the stored secret. So those carry the same owner/admin guard as billing
+ * and workspace settings.
+ */
+export const connectionRoutes = new Hono<AppEnv>()
+
+connectionRoutes.use("*", requireAuth)
+
+const credentialAdmin = requireWorkspaceRole("owner", "admin")
+
+connectionRoutes.get("/:workspaceId/connections", workspaceScope, connectionController.list)
+connectionRoutes.get(
+	"/:workspaceId/connections/:connectionId",
+	workspaceScope,
+	connectionController.get,
+)
+connectionRoutes.put(
+	"/:workspaceId/connections/:connectionId",
+	workspaceScope,
+	credentialAdmin,
+	connectionController.save,
+)
+connectionRoutes.delete(
+	"/:workspaceId/connections/:connectionId",
+	workspaceScope,
+	credentialAdmin,
+	connectionController.remove,
+)
+connectionRoutes.post(
+	"/:workspaceId/connections/:connectionId/check",
+	workspaceScope,
+	credentialAdmin,
+	connectionController.check,
+)

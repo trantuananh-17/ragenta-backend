@@ -36,3 +36,24 @@ export const saveIntegrationSchema = z.object({
 })
 
 export type SaveIntegrationInput = z.infer<typeof saveIntegrationSchema>
+
+/**
+ * The name a workspace gives its own connection, and the name its agents use in
+ * `api_call`.
+ *
+ * A colon is not in the character set on purpose: a workspace-owned row is
+ * stored as `<workspaceId>:<slug>`, and a slug that could contain a separator
+ * would be a way to write another tenant's primary key
+ * (`connection-scope.ts`).
+ */
+export const connectionSlugSchema = z
+	.string()
+	.trim()
+	.min(2)
+	.max(60)
+	.regex(
+		/^[a-z0-9][a-z0-9_-]*$/,
+		"A connection name is lowercase letters, digits, `-` and `_`, starting with a letter or digit.",
+	)
+
+export type ConnectionSlug = z.infer<typeof connectionSlugSchema>

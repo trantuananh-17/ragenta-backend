@@ -1,74 +1,86 @@
-import { eq } from "drizzle-orm"
-
-import { db } from "../../db/client"
-import { integration } from "../../db/schema"
-import { encryptSecret } from "../../shared/crypto"
-import { NotFoundError, ValidationError } from "../../shared/errors"
+import { encryptSecret, maskSecret } from "../../shared/crypto"
+import { ConflictError, NotFoundError, ValidationError } from "../../shared/errors"
 import { auditService } from "../audit/audit.service"
 import { safeFetch } from "../agent/tools/safe-fetch"
 import { requireIntegration } from "../agent/tools/integrations"
+import {
+	chooseConnection,
+	composeConnectionId,
+	connectionCandidateIds,
+	presentConnection,
+} from "./connection-scope"
 import type { SaveIntegrationInput } from "./integration.dto"
-
-type IntegrationRow = typeof integration.$inferSelect
+import { integrationRepository } from "./integration.repository"
 
 /**
- * What an API response may say about an integration.
+ * One service for both owners.
  *
- * The secret never appears, in any form, in any shape — only whether one is
- * stored and its masked hint. Same rule as `provider_credential` (ADR-021), and
- * it is enforced here rather than left to each caller to remember.
+ * `organizationId` is `null` for the platform-wide connections an administrator
+ * manages and a workspace id for a workspace's own. It is never optional and
+ * never defaulted: the owner is what every query filters on, so making a caller
+ * state it is what stops a workspace route reaching a platform row it should
+ * only be able to read through resolution (`.claude/rules/security.md`).
  */
-function present(row: IntegrationRow) {
-	return {
-		id: row.id,
-		kind: row.kind,
-		name: row.name,
-		description: row.description,
-		enabled: row.enabled,
-		baseUrl: row.baseUrl,
-		hasSecret: Boolean(row.encryptedSecret),
-		secretHint: row.secretHint,
-		authHeader: row.authHeader,
-		authPrefix: row.authPrefix,
-		allowedMethods: row.allowedMethods,
-		allowedPathPrefix: row.allowedPathPrefix,
-		allowedRecipients: row.allowedRecipients,
-		lastUsedAt: row.lastUsedAt,
-		lastCheckedAt: row.lastCheckedAt,
-		lastCheckOk: row.lastCheckOk,
-		lastCheckError: row.lastCheckError,
-		updatedAt: row.updatedAt,
-	}
-}
+type Owner = string | null
 
-/** `sk-abc…wxyz`, enough to tell two keys apart and useless as a key. */
-function hint(secret: string): string {
-	return secret.length <= 8
-		? "••••"
-		: `${secret.slice(0, 4)}••••${secret.slice(-4)}`
+/**
+ * The stored primary key. A workspace's connections are namespaced by the
+ * workspace so two tenants can both call theirs `crm`; a platform-wide one is
+ * the name itself, exactly as it has always been.
+ */
+function rowId(organizationId: Owner, name: string): string {
+	return organizationId ? composeConnectionId(organizationId, name) : name
 }
 
 export const integrationService = {
-	async list() {
-		const rows = await db.select().from(integration)
-		return rows.map(present)
-	},
+	/**
+	 * A workspace sees the platform-wide connections alongside its own, each
+	 * labelled with its scope, because those are exactly the ones its agents may
+	 * name — a list that hid them would make `api_call` look unconfigurable. The
+	 * admin list is the platform-wide rows only: an administrator has no business
+	 * reading a tenant's credential metadata out of a global list.
+	 *
+	 * Seeing is not changing. Everything below refuses a row this owner does not
+	 * own, so a platform-wide connection appearing here is read-only to a
+	 * workspace.
+	 */
+	async list(organizationId: Owner) {
+		const owned = await integrationRepository.listOwnedBy(organizationId)
+		if (organizationId === null) return owned.map(presentConnection)
 
-	async get(id: string) {
-		const rows = await db.select().from(integration).where(eq(integration.id, id)).limit(1)
-		const row = rows[0]
-		if (!row) throw new NotFoundError("Integration")
-		return present(row)
+		const platform = await integrationRepository.listOwnedBy(null)
+		return [...owned, ...platform].map(presentConnection)
 	},
 
 	/**
-	 * Creates or replaces one integration.
-	 *
-	 * An omitted `secret` keeps whatever is stored: an administrator editing an
-	 * allowlist cannot read the key back, so requiring it on every save would
-	 * make every edit a key rotation.
+	 * Resolved the same way a run resolves a connection, so what the screen shows
+	 * is what the agent will actually get — including a workspace connection
+	 * shadowing a platform-wide one of the same name.
 	 */
-	async save(id: string, input: SaveIntegrationInput, actorId: string) {
+	async get(organizationId: Owner, name: string) {
+		const workspaceId = organizationId ?? undefined
+		const rows = await integrationRepository.listResolvable(
+			connectionCandidateIds(name, workspaceId),
+			workspaceId,
+		)
+		const row = chooseConnection(rows, name, workspaceId)
+		if (!row) throw new NotFoundError("Integration")
+		return presentConnection(row)
+	},
+
+	/**
+	 * Creates or replaces one connection.
+	 *
+	 * An omitted `secret` keeps whatever is stored: nobody can read the key back,
+	 * so requiring it on every save would make every allowlist edit a key
+	 * rotation.
+	 */
+	async save(
+		organizationId: Owner,
+		name: string,
+		input: SaveIntegrationInput,
+		actorId: string,
+	) {
 		if (input.kind === "http_api" && !input.baseUrl) {
 			throw new ValidationError("An API connection needs a base URL.")
 		}
@@ -77,19 +89,28 @@ export const integrationService = {
 				"An email connection needs at least one allowed recipient. Without one it would refuse every send.",
 			)
 		}
+		// `web_search` resolves the deployment's own connection and takes no
+		// workspace, so a workspace-owned one would be configuration that quietly
+		// does nothing. Refused rather than stored until that tool is scoped too.
+		if (organizationId !== null && input.kind === "web_search") {
+			throw new ValidationError(
+				"Web search uses the connection a platform administrator configured. A workspace cannot bring its own yet.",
+			)
+		}
 
-		const existing = await db
-			.select()
-			.from(integration)
-			.where(eq(integration.id, id))
-			.limit(1)
+		const id = rowId(organizationId, name)
+		const owner = await integrationRepository.findOwner(id)
+		if (owner && owner.organizationId !== organizationId) {
+			throw new ConflictError("That connection id is already in use.")
+		}
 
 		const secretFields = input.secret
-			? { encryptedSecret: encryptSecret(input.secret), secretHint: hint(input.secret) }
+			? { encryptedSecret: encryptSecret(input.secret), secretHint: maskSecret(input.secret) }
 			: {}
 
 		const values = {
 			id,
+			organizationId,
 			kind: input.kind,
 			name: input.name,
 			description: input.description,
@@ -104,15 +125,17 @@ export const integrationService = {
 			...secretFields,
 		}
 
-		const [saved] = existing[0]
-			? await db.update(integration).set(values).where(eq(integration.id, id)).returning()
-			: await db.insert(integration).values(values).returning()
+		const saved = owner
+			? await integrationRepository.update(id, organizationId, values)
+			: await integrationRepository.insert(values)
+		if (!saved) throw new NotFoundError("Integration")
 
 		// The key is not in the metadata, and must never be: an audit trail is
 		// read by more people than the table it describes.
 		await auditService.record({
-			action: existing[0] ? "integration.updated" : "integration.created",
+			action: owner ? "integration.updated" : "integration.created",
 			actorId,
+			organizationId,
 			targetType: "integration",
 			targetId: id,
 			metadata: {
@@ -122,16 +145,18 @@ export const integrationService = {
 			},
 		})
 
-		return present(saved!)
+		return presentConnection(saved)
 	},
 
-	async remove(id: string, actorId: string) {
-		const rows = await db.delete(integration).where(eq(integration.id, id)).returning()
-		if (rows.length === 0) throw new NotFoundError("Integration")
+	async remove(organizationId: Owner, name: string, actorId: string) {
+		const id = rowId(organizationId, name)
+		const deleted = await integrationRepository.remove(id, organizationId)
+		if (!deleted) throw new NotFoundError("Integration")
 
 		await auditService.record({
 			action: "integration.deleted",
 			actorId,
+			organizationId,
 			targetType: "integration",
 			targetId: id,
 		})
@@ -140,20 +165,31 @@ export const integrationService = {
 	/**
 	 * One cheap live call proving the connection works, and the outcome recorded
 	 * on the row — the same affordance the models screen has, for the same
-	 * reason: an administrator should not have to run an agent to find out that
-	 * a key is wrong.
+	 * reason: whoever configured a key should not have to run an agent to find
+	 * out that it is wrong.
 	 */
-	async check(id: string) {
-		const row = await this.get(id)
+	async check(organizationId: Owner, name: string) {
+		// Deliberately the owned row rather than the resolved one: a check spends a
+		// real call and writes its outcome onto the row, and a platform-wide
+		// connection's key is the platform administrator's to test.
+		const existing = await integrationRepository.findOwnedBy(
+			rowId(organizationId, name),
+			organizationId,
+		)
+		if (!existing) throw new NotFoundError("Integration")
 
-		if (row.kind === "email") {
+		if (existing.kind === "email") {
 			// Nothing to call: an email connection is the deployment's own SMTP,
 			// and the honest check is whether it is configured at all.
 			return { ok: true, detail: "Email connections are checked when a send is attempted." }
 		}
 
+		// Resolved through the same function a run uses, so a check cannot pass on
+		// a row the agent would not have been allowed to reach.
+		const workspaceId = organizationId ?? undefined
+
 		try {
-			const { row: full, secret } = await requireIntegration(id, row.kind)
+			const { row: full, secret } = await requireIntegration(name, existing.kind, workspaceId)
 			const headers: Record<string, string> = { accept: "application/json" }
 			if (secret && full.authHeader) {
 				headers[full.authHeader] = `${full.authPrefix}${secret}`
@@ -167,17 +203,14 @@ export const integrationService = {
 			const response = await safeFetch(target, { method: "GET", headers })
 			const ok = response.status < 500
 
-			await db
-				.update(integration)
-				.set({
-					lastCheckedAt: new Date(),
-					lastCheckOk: ok,
-					// A 4xx from the far side is a real answer and proves the host is
-					// reachable — it is recorded rather than treated as a failure,
-					// because "405 Method Not Allowed" means the connection works.
-					lastCheckError: ok ? null : `HTTP ${response.status}`,
-				})
-				.where(eq(integration.id, id))
+			await integrationRepository.touch(full.id, {
+				lastCheckedAt: new Date(),
+				lastCheckOk: ok,
+				// A 4xx from the far side is a real answer and proves the host is
+				// reachable — it is recorded rather than treated as a failure,
+				// because "405 Method Not Allowed" means the connection works.
+				lastCheckError: ok ? null : `HTTP ${response.status}`,
+			})
 
 			return {
 				ok,
@@ -185,10 +218,11 @@ export const integrationService = {
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : "The check failed."
-			await db
-				.update(integration)
-				.set({ lastCheckedAt: new Date(), lastCheckOk: false, lastCheckError: message.slice(0, 500) })
-				.where(eq(integration.id, id))
+			await integrationRepository.touch(rowId(organizationId, name), {
+				lastCheckedAt: new Date(),
+				lastCheckOk: false,
+				lastCheckError: message.slice(0, 500),
+			})
 			return { ok: false, detail: message }
 		}
 	},

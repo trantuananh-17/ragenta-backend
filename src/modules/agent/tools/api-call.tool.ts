@@ -34,6 +34,8 @@ const MAX_CONTENT = 8_000
  *
  * - the **base URL** is the integration's, never the model's — it names a
  *   connection, not a host, so it cannot be redirected at something else
+ * - the **connection** is resolved against the run's own workspace, so naming
+ *   another tenant's connection resolves to nothing rather than to their key
  * - the **method** must be one the integration allows, so a connection someone
  *   configured read-only stays read-only however the model is talked to
  * - the **path** must start with the integration's prefix, so a connection
@@ -56,12 +58,19 @@ export const apiCallTool: AgentTool = {
 		const input = parameters.parse(args)
 
 		try {
-			const { row, secret } = await requireIntegration(input.integration, "http_api")
+			// The run's workspace, not the model's word for it: resolution accepts
+			// the platform-wide connections plus this workspace's own, and nothing
+			// else (`integrations.ts`).
+			const { row, secret } = await requireIntegration(
+				input.integration,
+				"http_api",
+				context.workspaceId,
+			)
 
 			if (!row.allowedMethods.includes(input.method)) {
 				return {
 					ok: false,
-					content: `The "${row.id}" connection allows ${row.allowedMethods.join(", ")}. ${input.method} is not permitted.`,
+					content: `The "${input.integration}" connection allows ${row.allowedMethods.join(", ")}. ${input.method} is not permitted.`,
 					metadata: { integration: row.id, refused: "method" },
 				}
 			}
@@ -70,7 +79,7 @@ export const apiCallTool: AgentTool = {
 			if (row.allowedPathPrefix && !path.startsWith(row.allowedPathPrefix)) {
 				return {
 					ok: false,
-					content: `The "${row.id}" connection only reaches paths under ${row.allowedPathPrefix}.`,
+					content: `The "${input.integration}" connection only reaches paths under ${row.allowedPathPrefix}.`,
 					metadata: { integration: row.id, refused: "path" },
 				}
 			}
@@ -92,7 +101,7 @@ export const apiCallTool: AgentTool = {
 			return {
 				ok: response.status >= 200 && response.status < 300,
 				content: [
-					`HTTP ${response.status} from ${row.id}${path}`,
+					`HTTP ${response.status} from ${input.integration}${path}`,
 					clipped || "(no body)",
 					response.body.length > MAX_CONTENT ? "\n[response truncated]" : "",
 				]

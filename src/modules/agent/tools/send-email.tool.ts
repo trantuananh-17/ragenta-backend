@@ -39,12 +39,15 @@ export const sendEmailTool: AgentTool = {
 		const input = parameters.parse(args)
 
 		try {
-			const { row } = await requireIntegration("email", "email")
+			// A workspace that configured its own `email` connection sends through
+			// that one; otherwise the deployment's. Either way the recipient
+			// allowlist below is the row's, never the model's.
+			const { row } = await requireIntegration("email", "email", context.workspaceId)
 
 			if (!allowed(input.to, row.allowedRecipients)) {
 				return {
 					ok: false,
-					content: `"${input.to}" is not on the allowed recipient list for this deployment. Ask an administrator to add it.`,
+					content: `"${input.to}" is not on the allowed recipient list for this connection. Ask an administrator to add it.`,
 					metadata: { refused: "recipient", to: input.to },
 				}
 			}

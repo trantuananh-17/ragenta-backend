@@ -615,8 +615,41 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		status: 202,
 	},
 
+	"GET /v1/workspaces/:workspaceId/connections": {
+		summary:
+			"Connections the workspace's agents may name: its own plus the platform-wide ones, each labelled with its scope. Allowlists included, secrets masked",
+		tags: ["Connections"],
+		access: "any member",
+	},
+	"GET /v1/workspaces/:workspaceId/connections/:connectionId": {
+		summary:
+			"One connection by the name an agent uses, resolved as a run resolves it — the workspace's own shadows a platform-wide one of the same name",
+		tags: ["Connections"],
+		access: "any member",
+	},
+	"PUT /v1/workspaces/:workspaceId/connections/:connectionId": {
+		summary:
+			"Create or replace one of the workspace's connections. The secret is encrypted at rest and never returned; omitting it keeps the stored one",
+		tags: ["Connections"],
+		access: "owner, admin",
+		body: saveIntegrationSchema,
+	},
+	"DELETE /v1/workspaces/:workspaceId/connections/:connectionId": {
+		summary: "Delete one of the workspace's connections. Agents naming it then refuse",
+		tags: ["Connections"],
+		access: "owner, admin",
+		status: 204,
+	},
+	"POST /v1/workspaces/:workspaceId/connections/:connectionId/check": {
+		summary:
+			"One live call proving the workspace's own connection works. The outcome is kept on the row; a platform-wide connection is the administrator's to test",
+		tags: ["Connections"],
+		access: "owner, admin",
+	},
+
 	"GET /v1/admin/integrations": {
-		summary: "Outside systems agents may act on, with their allowlists (secrets masked)",
+		summary:
+			"Platform-wide connections every workspace may use, with their allowlists (secrets masked). A workspace's own live under /v1/workspaces/:workspaceId/connections",
 		tags: ["Admin"],
 		access: "platform admin",
 	},

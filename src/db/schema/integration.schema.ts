@@ -1,11 +1,18 @@
 import { relations, sql } from "drizzle-orm"
-import { boolean, check, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core"
+import { boolean, check, index, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core"
 
 import { user } from "./auth.schema"
+import { organization } from "./workspace.schema"
 
 /**
- * An outside system an agent is allowed to reach, configured by a platform
- * administrator.
+ * An outside system an agent is allowed to reach.
+ *
+ * Two owners, one table. `organization_id` NULL is a platform-wide connection a
+ * platform administrator configured and every workspace may name; set, it is a
+ * connection one workspace owns and only that workspace may name. A parallel
+ * `connection` table for the second case would mean two places to audit, two
+ * encryption paths and two ways to leak a secret — and the allowlist logic,
+ * which is the actual security boundary, would have to be right in both.
  *
  * Separate from `provider_credential` on purpose. That table holds the keys for
  * the models Ragenta runs; this one holds keys for systems a *customer's agent*
@@ -22,8 +29,24 @@ import { user } from "./auth.schema"
 export const integration = pgTable(
 	"integration",
 	{
-		/** Stable id an agent's tool names, e.g. `tavily` or `crm`. */
+		/**
+		 * Stable id an agent's tool names, e.g. `tavily` or `crm`.
+		 *
+		 * Platform-wide rows use that name verbatim. A workspace-owned row stores
+		 * `<organizationId>:<name>`, because two workspaces both calling their CRM
+		 * `crm` is the normal case and this column is the primary key. The
+		 * composition lives in `connection-scope.ts` and nowhere else.
+		 */
 		id: text("id").primaryKey(),
+		/**
+		 * NULL means platform-wide. Set means the connection belongs to this
+		 * workspace, and resolving one for a run accepts platform-wide rows plus
+		 * this workspace's own — never another tenant's
+		 * (`.claude/rules/security.md`).
+		 */
+		organizationId: text("organization_id").references(() => organization.id, {
+			onDelete: "cascade",
+		}),
 		/** web_search | http_api | email */
 		kind: text("kind").notNull(),
 		name: text("name").notNull(),
@@ -78,9 +101,14 @@ export const integration = pgTable(
 	},
 	(table) => [
 		check("integration_kind_check", sql`${table.kind} in ('web_search', 'http_api', 'email')`),
+		index("integration_organizationId_idx").on(table.organizationId),
 	],
 )
 
 export const integrationRelations = relations(integration, ({ one }) => ({
 	updatedByUser: one(user, { fields: [integration.updatedBy], references: [user.id] }),
+	organization: one(organization, {
+		fields: [integration.organizationId],
+		references: [organization.id],
+	}),
 }))
