@@ -21,8 +21,8 @@ import { agentGraphSchema } from "./graph/types"
 import type { GraphState } from "./graph/engine"
 import { runGraph } from "./graph/engine"
 import type { NodeContext } from "./graph/nodes"
-import { runToolLoop } from "./loop"
-import { toolsFor } from "./tools"
+import { runApprovedTool, runToolLoop } from "./loop"
+import { toolWrites, toolsFor } from "./tools"
 import { clearStop, isStopRequested } from "./stop-signal"
 
 const log = logger.child({ module: "agent.runner" })
@@ -68,7 +68,25 @@ export interface PreparedRun {
 	input: RunAgentInput
 	actorId: string | null
 	/** Set when resuming: the state the paused run left behind. */
-	resume?: { state: GraphState; answers: Record<string, string> } | null
+	resume?: {
+		state: GraphState & { loop?: LoopPause }
+		answers: Record<string, string>
+		/** Present when the pause was a write waiting to be approved (ADR-032). */
+		approval?: { approved: boolean; call: PendingCall } | null
+	} | null
+}
+
+/** A write the run stopped in front of, saved so it can happen after approval. */
+export interface PendingCall {
+	id: string
+	name: string
+	arguments: string
+}
+
+/** What a paused tool loop saved. Values only, like a paused flow's state. */
+export interface LoopPause {
+	messages: ChatMessage[]
+	call: PendingCall
 }
 
 export type AgentStreamEvent =
@@ -180,14 +198,26 @@ export const agentRunner = {
 		const version = await agentRepository.findVersionById(run.agentVersionId)
 		if (!version) throw new NotFoundError("Agent version")
 
-		const state = run.state as unknown as GraphState
+		const state = run.state as unknown as GraphState & { loop?: LoopPause }
 		const input = { input: String((run.input as { input?: string }).input ?? "") }
 
 		await agentRepository.updateRun(run.id, { status: "running" })
 
 		return {
 			...(await this.check(workspaceId, agent, version, run, input, actorId)),
-			resume: { state, answers },
+			resume: {
+				state,
+				answers,
+				approval: state.loop
+					? {
+							// Anything other than an explicit yes is a no. A pause that
+							// timed out, or an answer nobody understood, must not become
+							// permission to send the email.
+							approved: (answers.approve ?? "").trim().toLowerCase() === "yes",
+							call: state.loop.call,
+						}
+					: null,
+			},
 		}
 	},
 
@@ -275,6 +305,7 @@ export const agentRunner = {
 		let seq = 0
 		let finished = false
 		let state: GraphState | null = null
+		let loopPause: LoopPause | null = null
 
 		const charge = async (input: ChargeInput) => {
 			const reference = `agent-run:${run.id}:step:${seq}`
@@ -372,6 +403,9 @@ export const agentRunner = {
 				error: failure ? failure.slice(0, 500) : null,
 				credits: credits.toFixed(4),
 				...(state ? { state: state as unknown as Record<string, unknown> } : {}),
+				...(loopPause
+					? { state: { loop: loopPause } as unknown as Record<string, unknown> }
+					: {}),
 				// A run still waiting for a person has not finished.
 				...(awaiting ? {} : { finishedAt: new Date() }),
 			})
@@ -484,6 +518,18 @@ export const agentRunner = {
 					onFailure: (message) => {
 						failure = message
 					},
+					onAwaiting: (pause) => {
+						awaiting = true
+						loopPause = pause
+					},
+					resume:
+						prepared.resume?.approval && prepared.resume.state.loop
+							? {
+									approved: prepared.resume.approval.approved,
+									call: prepared.resume.approval.call,
+									messages: prepared.resume.state.loop.messages,
+								}
+							: null,
 				})
 			}
 
@@ -534,6 +580,9 @@ export const agentRunner = {
 			onDelta: (text: string) => void
 			onStopped: () => void
 			onFailure: (message: string) => void
+			onAwaiting: (pause: LoopPause) => void
+			/** The approval decision, when this call is resuming a paused run. */
+			resume?: { approved: boolean; call: PendingCall; messages: ChatMessage[] } | null
 		},
 	): AsyncGenerator<AgentStreamEvent> {
 		const { version, selection } = prepared
@@ -566,9 +615,69 @@ export const agentRunner = {
 			})
 		}
 
-		const messages = searchesItself
+		let messages = searchesItself
 			? this.openingMessages(prepared, version.instructions)
 			: context.messages
+
+		const tools = toolsFor(version.tools, version.knowledgeBaseIds, hooks.citations)
+
+		/**
+		 * Resuming an approved write: the call has to happen *before* the loop is
+		 * re-entered, because the loop starts by asking the model — and the model
+		 * cannot be asked anything until the tool call it made has an answer.
+		 */
+		if (hooks.resume) {
+			const { approved, call } = hooks.resume
+			messages = hooks.resume.messages
+
+			const result = approved
+				? await runApprovedTool(tools, call, {
+						workspaceId,
+						projectId: prepared.agent.projectId,
+						userId: prepared.actorId,
+						runId: prepared.run.id,
+						stepSeq: 0,
+						signal: hooks.signal,
+					})
+				: {
+						ok: false,
+						// Phrased as a decision rather than a failure, so the model
+						// reports that a person declined instead of retrying it.
+						content: `A person declined this ${call.name} call. Do not try it again; explain what you would have done and stop.`,
+						metadata: { declined: true } as Record<string, unknown>,
+						usage: undefined,
+					}
+
+			yield {
+				type: "tool_started",
+				seq: 0,
+				name: call.name,
+				arguments: call.arguments.slice(0, 500),
+			}
+			await hooks.record({
+				name: call.name,
+				ok: result.ok,
+				payload: { arguments: call.arguments.slice(0, 2_000), approved },
+				output: { ...(result.metadata ?? {}), preview: result.content.slice(0, 2_000) },
+			})
+			yield {
+				type: "tool_finished",
+				seq: 0,
+				name: call.name,
+				ok: result.ok,
+				summary: result.content.slice(0, 200),
+			}
+
+			messages = [
+				...messages,
+				{
+					role: "tool",
+					content: result.content,
+					toolCallId: call.id,
+					name: call.name,
+				},
+			]
+		}
 
 		if (hooks.citations.size > 0) {
 			yield { type: "citations", citations: hooks.citations.all() }
@@ -581,7 +690,6 @@ export const agentRunner = {
 
 		yield { type: "phase", phase: "generating" }
 
-		const tools = toolsFor(version.tools, version.knowledgeBaseIds, hooks.citations)
 		let seqForTools = 0
 
 		for await (const event of runToolLoop(messages, {
@@ -602,6 +710,9 @@ export const agentRunner = {
 			isStopped: hooks.stopCheck,
 			mayContinue: hooks.mayContinue,
 			signal: hooks.signal,
+			needsApproval: version.approveWrites
+				? (name) => toolWrites(name)
+				: undefined,
 		})) {
 			if (event.type === "delta") {
 				hooks.onDelta(event.text)
@@ -662,6 +773,18 @@ export const agentRunner = {
 						output: { ...event.charge.metadata, preview: event.charge.content },
 					})
 				}
+			} else if (event.type === "awaiting_approval") {
+				hooks.onAwaiting({ messages: event.messages, call: event.call })
+				yield {
+					type: "awaiting_input",
+					runId: prepared.run.id,
+					nodeId: event.call.name,
+					prompt: `This agent wants to run ${event.call.name}. Approve it?
+
+${event.call.arguments.slice(0, 800)}`,
+					fields: ["approve"],
+				}
+				return
 			} else if (event.type === "finished") {
 				if (event.reason === "stopped") hooks.onStopped()
 				if (event.reason === "ceiling") {

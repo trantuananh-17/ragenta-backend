@@ -4,6 +4,7 @@ import { requireAdmin } from "../../api/middleware/require-admin"
 import { requireAuth } from "../../api/middleware/session"
 import type { AppEnv } from "../../api/types"
 import { promoController } from "../promo/promo.controller"
+import { integrationController } from "../integration/integration.controller"
 import { providerController } from "../provider/provider.controller"
 import { adminController } from "./admin.controller"
 
@@ -41,6 +42,15 @@ adminRoutes.post("/providers/:provider/models/import", providerController.import
 adminRoutes.post("/models", providerController.upsertModel)
 adminRoutes.patch("/providers/:provider/models/:model", providerController.patchModel)
 adminRoutes.delete("/providers/:provider/models/:model", providerController.removeModel)
+// Outside systems an agent may act on. Platform-level like the model providers,
+// and for the same reason: the deployment owns the credential, and the allowlist
+// on each row is what bounds every agent in it.
+adminRoutes.get("/integrations", integrationController.list)
+adminRoutes.get("/integrations/:integrationId", integrationController.get)
+adminRoutes.put("/integrations/:integrationId", integrationController.save)
+adminRoutes.delete("/integrations/:integrationId", integrationController.remove)
+adminRoutes.post("/integrations/:integrationId/check", integrationController.check)
+
 adminRoutes.get("/settings/models", providerController.getDefaults)
 adminRoutes.put("/settings/models", providerController.setDefaults)
 // Which models each plan may offer, and what it runs by default. One plan per

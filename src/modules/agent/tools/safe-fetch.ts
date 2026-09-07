@@ -98,7 +98,11 @@ export interface SafeFetchResult {
 
 export async function safeFetch(
 	rawUrl: string,
-	options: { method?: "GET" | "POST"; headers?: Record<string, string>; body?: string },
+	options: {
+		method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"
+		headers?: Record<string, string>
+		body?: string
+	},
 	signal?: AbortSignal,
 ): Promise<SafeFetchResult> {
 	let current: URL

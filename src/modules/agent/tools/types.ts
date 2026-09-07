@@ -49,6 +49,14 @@ export interface AgentTool {
 	description: string
 	/** Validated against, and turned into the JSON Schema the model is given. */
 	parameters: z.ZodType
+	/**
+	 * True when the tool changes something outside Ragenta.
+	 *
+	 * It is what the approval gate keys on: a tool that only reads can be got
+	 * wrong and cost a little, while one that sends an email or POSTs to a
+	 * customer's system gets it wrong once and it has happened (ADR-032).
+	 */
+	writes?: boolean
 	execute(context: ToolContext, args: unknown): Promise<ToolResult>
 }
 

@@ -138,6 +138,17 @@ export const agentVersion = pgTable(
 		 */
 		creditCeiling: numeric("credit_ceiling", { precision: 14, scale: 4 }),
 		/**
+		 * Pause and ask a person before any tool that changes something outside
+		 * Ragenta actually runs (ADR-032).
+		 *
+		 * On by default. A tool that only reads can be got wrong and cost a little;
+		 * one that sends an email or POSTs to a customer's system gets it wrong
+		 * once and it has happened. The run stops with what it is about to do on
+		 * screen and carries on when someone approves — the same mechanism a flow's
+		 * `user_input` node uses.
+		 */
+		approveWrites: boolean("approve_writes").default(true).notNull(),
+		/**
 		 * A flow, when this version is one (ADR-031). Null means the version is a
 		 * single prompt — which is what every version written before graphs existed
 		 * is, and what most agents will stay.

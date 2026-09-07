@@ -52,6 +52,16 @@ export type LoopEvent =
 	| { type: "round_finished"; charge: RoundCharge }
 	/** A tool call finished. The caller charges and records it. */
 	| { type: "tool_charge"; charge: ToolCharge }
+	/**
+	 * A tool that changes something is about to run and the run needs a person
+	 * to say yes. The loop stops here and hands back everything needed to carry
+	 * on later — the caller saves it and the run pauses (ADR-032).
+	 */
+	| {
+			type: "awaiting_approval"
+			call: { id: string; name: string; arguments: string }
+			messages: ChatMessage[]
+		}
 	/** The loop ended. `reason` says why, for the run's own record. */
 	| {
 			type: "finished"
@@ -59,6 +69,18 @@ export type LoopEvent =
 			usage: TokenUsage
 			reason: "answered" | "max_rounds" | "stopped" | "ceiling" | "no_credits"
 		}
+
+/**
+ * Runs one tool the caller already has in hand — used when a paused run is
+ * approved and the call has to happen before the loop is re-entered.
+ */
+export async function runApprovedTool(
+	tools: AgentTool[],
+	call: { name: string; arguments: string },
+	context: ToolContext,
+) {
+	return executeTool(tools, call, context)
+}
 
 export interface LoopOptions {
 	client: ChatCapableClient
@@ -75,6 +97,11 @@ export interface LoopOptions {
 	mayContinue?: () => Promise<"ok" | "ceiling" | "no_credits">
 	/** Emitted token by token. False for a node inside a graph, whose output is a value. */
 	streamDeltas?: boolean
+	/**
+	 * Whether this tool must be approved by a person before it runs. Absent means
+	 * nothing needs approval — which is right for a tool set that only reads.
+	 */
+	needsApproval?: (toolName: string) => boolean
 	signal?: AbortSignal
 }
 
@@ -170,6 +197,13 @@ export async function* runToolLoop(
 		messages = [...messages, { role: "assistant", content: text, toolCalls: calls }]
 
 		for (const call of calls) {
+			// Checked before the tool runs, not after: the whole point is that
+			// nothing has happened yet when the person is asked.
+			if (options.needsApproval?.(call.name)) {
+				yield { type: "awaiting_approval", call, messages }
+				return
+			}
+
 			yield {
 				type: "tool_started",
 				name: call.name,

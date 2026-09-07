@@ -12,6 +12,7 @@ import {
 	updateAgentSchema,
 } from "../modules/agent/agent.dto"
 import { createCheckoutSchema, updateAutoReloadSchema } from "../modules/billing/billing.dto"
+import { saveIntegrationSchema } from "../modules/integration/integration.dto"
 import {
 	createConversationSchema,
 	sendMessageSchema,
@@ -553,6 +554,34 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		access: "owner, admin, member",
 	},
 
+	"GET /v1/admin/integrations": {
+		summary: "Outside systems agents may act on, with their allowlists (secrets masked)",
+		tags: ["Admin"],
+		access: "platform admin",
+	},
+	"GET /v1/admin/integrations/:integrationId": {
+		summary: "One integration",
+		tags: ["Admin"],
+		access: "platform admin",
+	},
+	"PUT /v1/admin/integrations/:integrationId": {
+		summary:
+			"Create or replace an integration. Omitting `secret` keeps the stored key, so editing an allowlist is not a key rotation",
+		tags: ["Admin"],
+		access: "platform admin",
+		body: saveIntegrationSchema,
+	},
+	"DELETE /v1/admin/integrations/:integrationId": {
+		summary: "Delete an integration. Agents naming it then refuse",
+		tags: ["Admin"],
+		access: "platform admin",
+		status: 204,
+	},
+	"POST /v1/admin/integrations/:integrationId/check": {
+		summary: "One live call proving the connection works. The outcome is kept on the row",
+		tags: ["Admin"],
+		access: "platform admin",
+	},
 	"GET /v1/admin/providers": {
 		summary: "Providers, credential state (masked) and the merged model catalogue",
 		tags: ["Admin"],
