@@ -1,5 +1,7 @@
 import { isAppError } from "../../../shared/errors"
 import { logger } from "../../../shared/logger"
+import { MAX_NODE_EXECUTIONS, nextRunnable } from "../checkpoint"
+import type { GraphState } from "../checkpoint"
 import { NODE_IMPLEMENTATIONS } from "./nodes"
 import type { NodeContext, NodeEvent } from "./nodes"
 import type { AgentGraph, NodeOutput } from "./types"
@@ -8,31 +10,12 @@ import { BEGIN_NODE } from "./types"
 const log = logger.child({ module: "agent.graph" })
 
 /**
- * How many nodes one run may execute.
- *
- * A graph is a DAG in the ordinary case, but `onError.goto` can point backwards
- * and a canvas will eventually let someone draw a cycle. This is the backstop
- * that turns "runs forever, billing every round" into a failed run with a
- * reason.
+ * Everything a paused or interrupted run needs to carry on later, and nothing
+ * else. Defined with the rest of the checkpoint in `../checkpoint.ts`, because
+ * the state the engine yields and the state a resumed run is handed have to be
+ * one type or they will drift.
  */
-const MAX_NODE_EXECUTIONS = 50
-
-/**
- * Everything a paused run needs to carry on later, and nothing else.
- *
- * Stored on `agent_run.state`. It holds *values*, never a resumed provider
- * connection or a half-built prompt: a run waiting on a person may wait for
- * days, across a deploy, and anything that cannot survive a restart has no
- * business being in here.
- */
-export interface GraphState {
-	completed: string[]
-	reached: string[]
-	values: Record<string, Record<string, string>>
-	/** The `user_input` node the run stopped at, if any. */
-	pending: string | null
-	output: string
-}
+export type { GraphState }
 
 export type GraphEvent =
 	| { type: "node_started"; nodeId: string; label: string; nodeType: string }
@@ -41,6 +24,12 @@ export type GraphEvent =
 	| { type: "tool_started"; name: string; arguments: string }
 	| { type: "tool_finished"; name: string; ok: boolean; summary: string }
 	| { type: "citations" }
+	/**
+	 * A node boundary the run can be picked up from. The caller persists `state`
+	 * and everything before it is settled: a crash, a deploy or a timeout after
+	 * this point costs the node that was in flight, not the whole run.
+	 */
+	| { type: "checkpoint"; state: GraphState }
 	/** The run is waiting for a person. The caller saves `state` and returns. */
 	| {
 			type: "awaiting_input"
@@ -49,13 +38,15 @@ export type GraphEvent =
 			fields: string[]
 			state: GraphState
 		}
+	/** Cancelled between nodes, with everything finished so far kept. */
+	| { type: "stopped"; state: GraphState }
 	| { type: "finished"; output: string; state: GraphState }
 	| { type: "failed"; message: string; state: GraphState }
 
 export interface RunGraphOptions {
 	graph: AgentGraph
 	context: NodeContext
-	/** Fresh run, or the state a paused one left behind. */
+	/** Fresh run, or the state a paused or interrupted one left behind. */
 	state?: GraphState | null
 	/** The run's input, reachable as `{{sys.input}}`. */
 	input: string
@@ -76,6 +67,11 @@ export interface RunGraphOptions {
  * is built from — depend on which provider answered first. Sequential is slower
  * on a wide graph and correct on every graph. Worth revisiting when a real one
  * is wide enough for it to matter.
+ *
+ * **The node boundary is the checkpoint.** A node either finishes or it does
+ * not; there is no half-finished node to resume into. So the engine yields a
+ * `checkpoint` after each one and the caller writes it, which is what makes a
+ * crash cost one node rather than the run.
  */
 export async function* runGraph(
 	options: RunGraphOptions,
@@ -91,7 +87,9 @@ export async function* runGraph(
 	context.values = values
 
 	let output = options.state?.output ?? ""
-	let executions = 0
+	// Carried across attempts, not counted per attempt: a retry that reset the
+	// budget would hand a looping flow an unbounded bill in instalments.
+	let executions = options.state?.executions ?? 0
 
 	const snapshot = (pending: string | null): GraphState => ({
 		completed: [...completed],
@@ -99,6 +97,7 @@ export async function* runGraph(
 		values,
 		pending,
 		output,
+		executions,
 	})
 
 	// A resumed run re-executes the node it stopped at. That node finds its
@@ -116,8 +115,11 @@ export async function* runGraph(
 			continue
 		}
 
+		// Between nodes, never inside one. Stopping mid-node would throw away a
+		// provider call that has already been paid for, which is the mistake
+		// ADR-028 exists to prevent.
 		if (options.isStopped && (await options.isStopped())) {
-			yield { type: "finished", output, state: snapshot(null) }
+			yield { type: "stopped", state: snapshot(null) }
 			return
 		}
 
@@ -146,6 +148,7 @@ export async function* runGraph(
 			}
 			yield { type: "node_finished", nodeId, label, ok: false }
 			markDone(nodeId, node, result)
+			yield { type: "checkpoint", state: snapshot(null) }
 			continue
 		}
 
@@ -164,6 +167,7 @@ export async function* runGraph(
 
 		yield { type: "node_finished", nodeId, label, ok: true }
 		markDone(nodeId, node, result)
+		yield { type: "checkpoint", state: snapshot(null) }
 	}
 
 	if (executions >= MAX_NODE_EXECUTIONS) {
@@ -186,32 +190,6 @@ export async function* runGraph(
 		if (result.text) output = result.text
 		for (const target of result.next ?? node.downstream) reached.add(target)
 	}
-}
-
-/**
- * The next node that can run: reached, not yet done, and with every reached
- * upstream finished.
- *
- * The "reached" qualifier is the whole trick. A join whose two inputs are the
- * two sides of a `switch` would never run if it waited for both, because only
- * one side is ever taken.
- */
-function nextRunnable(
-	graph: AgentGraph,
-	reached: Set<string>,
-	completed: Set<string>,
-): string | undefined {
-	for (const id of reached) {
-		if (completed.has(id)) continue
-		const node = graph.nodes[id]
-		if (!node) continue
-
-		const blocked = node.upstream.some(
-			(source) => reached.has(source) && !completed.has(source),
-		)
-		if (!blocked) return id
-	}
-	return undefined
 }
 
 /** Runs one node, forwarding its events and retrying it if its policy says to. */

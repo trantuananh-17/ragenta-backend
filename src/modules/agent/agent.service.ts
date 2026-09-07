@@ -9,11 +9,18 @@ import { page } from "../../shared/pagination"
 import { auditService } from "../audit/audit.service"
 import { knowledgeService } from "../knowledge/knowledge.service"
 import { modelService } from "../model/model.service"
+import { enqueueAgentRun } from "../../queue/agent.jobs"
 import { agentRepository } from "./agent.repository"
+import { RETRYABLE_STATUSES, nextSeq, readCheckpoint } from "./checkpoint"
 import { validateGraph } from "./graph/types"
 import { TOOL_CATALOGUE, TOOL_IDS, isToolId } from "./tools"
-import type { AgentConfigInput, CreateAgentInput, UpdateAgentInput } from "./agent.dto"
-import { requestStop } from "./stop-signal"
+import type {
+	AgentConfigInput,
+	CreateAgentInput,
+	RunAgentInput,
+	UpdateAgentInput,
+} from "./agent.dto"
+import { clearStop, requestStop } from "./stop-signal"
 
 /**
  * Turns a validated configuration into the columns of a new immutable version.
@@ -291,12 +298,101 @@ export const agentService = {
 	},
 
 	/**
-	 * Asks a running run to stop. The run row is read first, which is what proves
-	 * the caller's workspace owns it — the flag itself carries no authority.
+	 * Queues a run for the worker instead of streaming it in the request.
+	 *
+	 * The run row is written here, so the caller gets an id it can poll and stop
+	 * before any worker has looked at it. Everything else a run needs is read off
+	 * that row when the job runs — the payload carries ids only, because a job
+	 * queued before a deploy has to act on what is true afterwards.
+	 */
+	async queueRun(
+		workspaceId: string,
+		agentId: string,
+		input: RunAgentInput,
+		actorId: string,
+	) {
+		const agent = await agentRepository.findById(workspaceId, agentId)
+		if (!agent) throw new NotFoundError("Agent")
+		if (agent.status !== "active") {
+			throw new ValidationError(`This agent is ${agent.status}. Activate it before running it.`)
+		}
+
+		const version = await agentRepository.findVersion(agent.id, agent.currentVersion)
+		if (!version) throw new NotFoundError("Agent version")
+
+		const run = await agentRepository.insertRun({
+			id: newId(),
+			organizationId: workspaceId,
+			agentId: agent.id,
+			agentVersionId: version.id,
+			projectId: agent.projectId,
+			userId: actorId,
+			trigger: "manual",
+			status: "pending",
+			input: { input: input.input, documentIds: input.documentIds ?? [] },
+		})
+		if (!run) throw new ValidationError("The run could not be queued.")
+
+		await enqueueAgentRun({ workspaceId, runId: run.id }, run.attempts)
+
+		return { runId: run.id, status: run.status, attempts: run.attempts }
+	},
+
+	/**
+	 * Runs a failed or stopped run again, from its last checkpoint rather than
+	 * from the beginning.
+	 *
+	 * On the queue rather than over SSE: the attempt this one is replacing died,
+	 * which is the case where holding an HTTP request open is exactly the wrong
+	 * thing to do. A run waiting on a person is not retried — answering it is a
+	 * decision, and `resume` is where that happens.
+	 */
+	async retryRun(workspaceId: string, runId: string) {
+		const run = await this.getRun(workspaceId, runId)
+		if (!(RETRYABLE_STATUSES as readonly string[]).includes(run.status)) {
+			throw new ValidationError(
+				`Only a failed or stopped run can be retried. This one is ${run.status}.`,
+			)
+		}
+
+		// A run that was stopped still carries the flag that stopped it, and the
+		// next attempt polls the same key — leaving it would have the retry stop
+		// at its first node.
+		await clearStop(workspaceId, runId)
+		await agentRepository.updateRun(runId, { status: "pending", error: null, finishedAt: null })
+		await enqueueAgentRun({ workspaceId, runId }, run.attempts)
+
+		return {
+			runId: run.id,
+			status: "pending",
+			attempt: run.attempts + 1,
+			/** Where the next attempt starts numbering, and so what it will not re-bill. */
+			resumingFromStep: nextSeq(readCheckpoint(run.state)),
+		}
+	},
+
+	/**
+	 * Asks a run to stop — the cancellation route as well as the stop button,
+	 * because they are one thing: an ask that the run ends at its next boundary
+	 * and keeps what it has (ADR-028).
+	 *
+	 * The run row is read first, which is what proves the caller's workspace owns
+	 * it — the flag itself carries no authority.
 	 */
 	async stopRun(workspaceId: string, runId: string) {
 		const run = await this.getRun(workspaceId, runId)
 		await requestStop(workspaceId, runId)
-		return { runId: run.id, requested: true }
+
+		// A queued run has no loop polling the flag yet, so nothing would ever act
+		// on it and the run would sit as pending until a worker picked it up and
+		// stopped it. Closing it here is what makes cancelling a queued run
+		// immediate; the flag still stands, so a worker that claimed it in the
+		// meantime stops at its next node and writes the same outcome.
+		if (run.status === "pending") {
+			await agentRepository.updateRun(runId, { status: "stopped", finishedAt: new Date() })
+			return { runId: run.id, requested: true, status: "stopped" }
+		}
+
+		return { runId: run.id, requested: true, status: run.status }
 	},
 }

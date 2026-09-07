@@ -155,9 +155,37 @@ export const agentRepository = {
 		return { items, total: totals?.value ?? 0 }
 	},
 
+	/**
+	 * A step is identified by `(run_id, seq)`, so a step this run has already
+	 * written is the same step, not a second one.
+	 *
+	 * Conflicts are ignored rather than raised because an attempt picked up from
+	 * a checkpoint replays the work that was in flight when the last one died,
+	 * under the step numbers it already had — which is exactly what makes the
+	 * matching `usage_ledger.reference` refuse to charge for it twice. Raising
+	 * here would turn that safety into a crash on every resumed run.
+	 */
 	async insertStep(row: typeof agentRunStep.$inferInsert, executor: DbExecutor = db) {
-		const [created] = await executor.insert(agentRunStep).values(row).returning()
+		const [created] = await executor
+			.insert(agentRunStep)
+			.values(row)
+			.onConflictDoNothing({ target: [agentRunStep.runId, agentRunStep.seq] })
+			.returning()
 		return created
+	},
+
+	/**
+	 * Claims the run for an attempt. `attempts` counts how many times a run has
+	 * been picked up — by a person, by the queue, or by a retry after a crash —
+	 * which is otherwise invisible once the process that was executing it is gone.
+	 */
+	async startAttempt(runId: string, executor: DbExecutor = db) {
+		const [updated] = await executor
+			.update(agentRun)
+			.set({ status: "running", attempts: sql`${agentRun.attempts} + 1` })
+			.where(eq(agentRun.id, runId))
+			.returning()
+		return updated
 	},
 
 	async listSteps(runId: string, executor: DbExecutor = db) {

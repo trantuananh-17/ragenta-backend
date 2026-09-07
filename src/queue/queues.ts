@@ -10,8 +10,23 @@ export const QUEUE_BILLING = "billing" as const
  * delay a credit refill behind it.
  */
 export const QUEUE_INGESTION = "ingestion" as const
+/**
+ * Agent runs executed outside an HTTP request (ADR-029, ADR-030).
+ *
+ * Deliberately not built until now, because a queue with no producer is
+ * speculative infrastructure. The producers exist: a run with a tool loop or a
+ * flow can take minutes, longer than a proxy will hold a stream open, and a run
+ * that is interrupted now has a checkpoint to be picked up from. Its own queue
+ * rather than a name on the ingestion one for the same reason ingestion has its
+ * own: a run can occupy a worker for minutes and must not sit in front of a
+ * document somebody is waiting to search.
+ */
+export const QUEUE_AGENT = "agent" as const
 
-export type QueueName = typeof QUEUE_BILLING | typeof QUEUE_INGESTION
+export type QueueName =
+	| typeof QUEUE_BILLING
+	| typeof QUEUE_INGESTION
+	| typeof QUEUE_AGENT
 
 /**
  * Defaults every job inherits. Explicit rather than relying on BullMQ's, because

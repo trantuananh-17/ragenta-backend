@@ -197,8 +197,28 @@ export const agentRun = pgTable(
 
 		/** manual | api | schedule. Only `manual` exists in Phase 1. */
 		trigger: text("trigger").default("manual").notNull(),
-		/** running | awaiting_input | succeeded | failed | stopped. */
-		status: text("status").default("running").notNull(),
+		/**
+		 * pending | running | awaiting_input | succeeded | failed | stopped.
+		 *
+		 * `pending` is a run that exists but that no process has claimed —
+		 * everything a queued run is between being asked for and being picked up.
+		 * Without it a run sitting in the queue is indistinguishable from one a
+		 * dead worker abandoned mid-flight.
+		 *
+		 * There is no separate `cancelled`: a cancelled run is `stopped`, which
+		 * already means "someone asked it to end and what it had was kept"
+		 * (ADR-028). Two names for that would be two things to keep in step.
+		 */
+		status: text("status").default("pending").notNull(),
+		/**
+		 * How many times this run has been picked up and started.
+		 *
+		 * More than one means an attempt died — a crash, a deploy, a timeout — or
+		 * that someone retried it. A run that resumes from a checkpoint looks
+		 * identical to one that never stopped, so without this the fact that it
+		 * happened at all is only in the logs of a process that is gone.
+		 */
+		attempts: integer("attempts").default(0).notNull(),
 
 		input: jsonb("input").$type<Record<string, unknown>>().default({}).notNull(),
 		output: text("output"),
@@ -208,7 +228,15 @@ export const agentRun = pgTable(
 		credits: numeric("credits", { precision: 14, scale: 4 }).default("0").notNull(),
 
 		/**
-		 * Where a paused flow got to, so it can carry on after a person answers.
+		 * The run's checkpoint: where it got to, so the next attempt carries on
+		 * instead of starting again.
+		 *
+		 * Written at every node boundary rather than only when a person is asked,
+		 * so a crash, a deploy or a timeout costs the node that was in flight and
+		 * not the whole run. It carries the step number as well as the frontier's
+		 * progress, because that number is what the `usage_ledger` reference is
+		 * built from and resuming it is what stops replayed work being billed
+		 * twice. Shape and rationale: `src/modules/agent/checkpoint.ts`.
 		 *
 		 * Values only — completed nodes, what each produced, which node is waiting.
 		 * A run waiting on a human may wait for days and across a deploy, so
@@ -225,7 +253,7 @@ export const agentRun = pgTable(
 		index("agentRun_agentId_createdAt_idx").on(table.agentId, table.createdAt),
 		check(
 			"agentRun_status_check",
-			sql`${table.status} in ('running', 'awaiting_input', 'succeeded', 'failed', 'stopped')`,
+			sql`${table.status} in ('pending', 'running', 'awaiting_input', 'succeeded', 'failed', 'stopped')`,
 		),
 		check("agentRun_trigger_check", sql`${table.trigger} in ('manual', 'api', 'schedule')`),
 	],

@@ -2,9 +2,10 @@ import { Worker } from "bullmq"
 import type { Job } from "bullmq"
 
 import { JOB_SCAN_AUTO_RELOAD, JOB_SCAN_PLAN_REFILLS } from "../jobs/billing.jobs"
-import { QUEUE_BILLING, QUEUE_INGESTION, getQueue } from "../queue/queues"
+import { QUEUE_AGENT, QUEUE_BILLING, QUEUE_INGESTION, getQueue } from "../queue/queues"
 import { createRedisConnection } from "../redis/client"
 import { logger } from "../shared/logger"
+import { processAgentJob } from "./processors/agent.processor"
 import { processBillingJob } from "./processors/billing.processor"
 import { processIngestionJob } from "./processors/ingestion.processor"
 
@@ -19,6 +20,14 @@ const CONCURRENCY = 5
  * ceiling as much as a throughput setting.
  */
 const INGESTION_CONCURRENCY = 2
+
+/**
+ * Lower still. An agent run holds a provider stream open for as long as the
+ * model keeps talking — minutes, over many rounds — so this is how many runs one
+ * worker process is willing to be blocked on, not how much work it can get
+ * through. Scale it by adding worker processes.
+ */
+const AGENT_CONCURRENCY = 2
 
 export function startWorkers(): Worker[] {
 	const billingWorker = new Worker(
@@ -59,7 +68,25 @@ export function startWorkers(): Worker[] {
 		log.info("job.completed", { queue: QUEUE_INGESTION, jobId: job.id, jobName: job.name })
 	})
 
-	return [billingWorker, ingestionWorker]
+	const agentWorker = new Worker(QUEUE_AGENT, async (job: Job) => processAgentJob(job), {
+		connection: createRedisConnection(),
+		concurrency: AGENT_CONCURRENCY,
+	})
+
+	agentWorker.on("failed", (job, error) => {
+		log.error("job.failed", error, {
+			queue: QUEUE_AGENT,
+			jobId: job?.id,
+			jobName: job?.name,
+			attempt: job?.attemptsMade,
+		})
+	})
+
+	agentWorker.on("completed", (job) => {
+		log.info("job.completed", { queue: QUEUE_AGENT, jobId: job.id, jobName: job.name })
+	})
+
+	return [billingWorker, ingestionWorker, agentWorker]
 }
 
 /**

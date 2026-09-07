@@ -575,8 +575,17 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		access: "owner, admin, member",
 		body: runAgentSchema,
 	},
+	"POST /v1/workspaces/:workspaceId/agents/:agentId/runs/queue": {
+		summary:
+			"Queue the run for the worker instead of streaming it. Returns a run id straight away; the steps and the answer are read back from the run, which the worker writes as it goes",
+		tags: ["Agents"],
+		access: "owner, admin, member",
+		body: runAgentSchema,
+		status: 202,
+	},
 	"GET /v1/workspaces/:workspaceId/agent-runs/:runId": {
-		summary: "One run, with its status, output and total credits",
+		summary:
+			"One run, with its status, output, total credits and how many times it has been started",
 		tags: ["Agents"],
 		access: "any member",
 	},
@@ -594,9 +603,16 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 	},
 	"POST /v1/workspaces/:workspaceId/agent-runs/:runId/stop": {
 		summary:
-			"Stop a run that is generating. The partial answer is saved and the stream ends with its normal `done` frame",
+			"Stop or cancel a run. It ends at its next node boundary, keeps what it has and can be retried from there; a run still queued is cancelled outright",
 		tags: ["Agents"],
 		access: "owner, admin, member",
+	},
+	"POST /v1/workspaces/:workspaceId/agent-runs/:runId/retry": {
+		summary:
+			"Run a failed or stopped run again on the queue, from its last checkpoint. Work the first attempt was already billed for is not charged again",
+		tags: ["Agents"],
+		access: "owner, admin, member",
+		status: 202,
 	},
 
 	"GET /v1/admin/integrations": {

@@ -16,9 +16,17 @@ import { usageService } from "../usage/usage.service"
 import { agentRepository } from "./agent.repository"
 import type { AgentRow, AgentRunRow, AgentVersionRow } from "./agent.repository"
 import type { RunAgentInput } from "./agent.dto"
+import {
+	PICKUP_STATUSES,
+	RUN_TIMEOUT_MS,
+	buildCheckpoint,
+	chargeReference,
+	nextSeq,
+	readCheckpoint,
+} from "./checkpoint"
+import type { GraphState, LoopPause, PendingCall, RunCheckpoint } from "./checkpoint"
 import { CitationCollector } from "./citations"
 import { agentGraphSchema } from "./graph/types"
-import type { GraphState } from "./graph/engine"
 import { runGraph } from "./graph/engine"
 import type { NodeContext } from "./graph/nodes"
 import { runApprovedTool, runToolLoop } from "./loop"
@@ -26,6 +34,17 @@ import { toolWrites, toolsFor } from "./tools"
 import { clearStop, isStopRequested } from "./stop-signal"
 
 const log = logger.child({ module: "agent.runner" })
+
+/** What the run was asked to do, read back off its own row rather than a caller. */
+function runInput(run: AgentRunRow): RunAgentInput {
+	const stored = run.input as { input?: unknown; documentIds?: unknown }
+	return {
+		input: typeof stored.input === "string" ? stored.input : "",
+		documentIds: Array.isArray(stored.documentIds)
+			? stored.documentIds.filter((id): id is string => typeof id === "string")
+			: undefined,
+	}
+}
 
 /** The ceiling on what one model call can produce, when the version sets none. */
 const DEFAULT_MAX_OUTPUT_TOKENS = 2_000
@@ -66,28 +85,22 @@ export interface PreparedRun {
 	client: ChatCapableClient
 	selection: { provider: string; model: string }
 	input: RunAgentInput
+	/**
+	 * Where a previous attempt of this run got to, or null for a fresh one.
+	 *
+	 * One field for two things that are the same thing to the runner: a run a
+	 * person paused and answered, and a run whose process died. Both carry on
+	 * from the last node boundary, with the step numbering the first attempt
+	 * left off at — which is what keeps the replayed work from being billed
+	 * again (see `checkpoint.ts`).
+	 */
+	checkpoint: RunCheckpoint | null
+	/** The answers a paused run was waiting for. Empty when nobody was asked. */
+	answers: Record<string, string>
 	actorId: string | null
-	/** Set when resuming: the state the paused run left behind. */
-	resume?: {
-		state: GraphState & { loop?: LoopPause }
-		answers: Record<string, string>
-		/** Present when the pause was a write waiting to be approved (ADR-032). */
-		approval?: { approved: boolean; call: PendingCall } | null
-	} | null
 }
 
-/** A write the run stopped in front of, saved so it can happen after approval. */
-export interface PendingCall {
-	id: string
-	name: string
-	arguments: string
-}
-
-/** What a paused tool loop saved. Values only, like a paused flow's state. */
-export interface LoopPause {
-	messages: ChatMessage[]
-	call: PendingCall
-}
+export type { LoopPause, PendingCall }
 
 export type AgentStreamEvent =
 	/** Sent before any token, so the client can ask for this run to stop. */
@@ -151,7 +164,10 @@ export const agentRunner = {
 			projectId: agent.projectId,
 			userId: actorId,
 			trigger: "manual",
-			status: "running",
+			// `running` is claimed by the attempt itself, in `stream`, so a run
+			// that never gets that far is visibly waiting rather than apparently
+			// executing in a process that has not touched it.
+			status: "pending",
 			input: { input: input.input, documentIds: input.documentIds ?? [] },
 		})
 		if (!run) throw new ValidationError("The run could not be started.")
@@ -198,26 +214,53 @@ export const agentRunner = {
 		const version = await agentRepository.findVersionById(run.agentVersionId)
 		if (!version) throw new NotFoundError("Agent version")
 
-		const state = run.state as unknown as GraphState & { loop?: LoopPause }
-		const input = { input: String((run.input as { input?: string }).input ?? "") }
-
-		await agentRepository.updateRun(run.id, { status: "running" })
-
 		return {
-			...(await this.check(workspaceId, agent, version, run, input, actorId)),
-			resume: {
-				state,
-				answers,
-				approval: state.loop
-					? {
-							// Anything other than an explicit yes is a no. A pause that
-							// timed out, or an answer nobody understood, must not become
-							// permission to send the email.
-							approved: (answers.approve ?? "").trim().toLowerCase() === "yes",
-							call: state.loop.call,
-						}
-					: null,
-			},
+			...(await this.check(workspaceId, agent, version, run, runInput(run), actorId)),
+			checkpoint: readCheckpoint(run.state),
+			answers,
+		}
+	},
+
+	/**
+	 * Picks a run up in the worker (ADR-029's `QUEUE_AGENT`): one that has been
+	 * queued and never started, or one whose previous attempt died mid-flight.
+	 *
+	 * Returns null rather than throwing when there is nothing to do, because a
+	 * BullMQ job runs more than once and the second run of it must be a no-op.
+	 * A run that has finished, been stopped, or is waiting on a person is not
+	 * something a retry may restart — resuming a pause is a person's decision
+	 * and has its own route.
+	 */
+	async pickUp(workspaceId: string, runId: string): Promise<PreparedRun | null> {
+		const run = await agentRepository.findRun(workspaceId, runId)
+		if (!run) throw new NotFoundError("Agent run")
+		if (!(PICKUP_STATUSES as readonly string[]).includes(run.status)) return null
+
+		const agent = await agentRepository.findById(workspaceId, run.agentId)
+		if (!agent) throw new NotFoundError("Agent")
+
+		// The version the run started on, not the agent's current one.
+		const version = await agentRepository.findVersionById(run.agentVersionId)
+		if (!version) throw new NotFoundError("Agent version")
+
+		try {
+			return {
+				...(await this.check(workspaceId, agent, version, run, runInput(run), run.userId)),
+				checkpoint: readCheckpoint(run.state),
+				answers: {},
+			}
+		} catch (error) {
+			// Same as `prepare`: a refusal belongs in the run row, because nobody
+			// is watching a queued run and a thrown job is not an explanation.
+			await agentRepository.updateRun(run.id, {
+				status: "failed",
+				error: (isAppError(error)
+					? error.message
+					: "Something went wrong before the run could start."
+				).slice(0, 500),
+				finishedAt: new Date(),
+			})
+			throw error
 		}
 	},
 
@@ -268,7 +311,7 @@ export const agentRunner = {
 			)
 		}
 
-		return { agent, version, run, client, selection, input, actorId }
+		return { agent, version, run, client, selection, input, actorId, checkpoint: null, answers: {} }
 	},
 
 	/**
@@ -280,35 +323,52 @@ export const agentRunner = {
 	 * `usage_ledger` row per provider call keyed `agent-run:{runId}:step:{seq}`,
 	 * the stop flag, and closing the run exactly once in a `finally` — lives here
 	 * rather than three times (ADR-029, ADR-031).
+	 *
+	 * **Every counter it keeps is seeded from the checkpoint, not from zero.**
+	 * The step number decides the usage reference, so restarting it at zero would
+	 * bill replayed work again under a name the unique index cannot recognise;
+	 * the credit total decides the ceiling, so restarting that would hand a
+	 * resumed run a fresh budget every time it paused.
 	 */
 	async *stream(
 		workspaceId: string,
 		prepared: PreparedRun,
 		signal?: AbortSignal,
 	): AsyncGenerator<AgentStreamEvent> {
-		const { run, version, selection } = prepared
+		const { run, version, selection, checkpoint } = prepared
 
 		// First, before a token exists: the client needs this id to ask for the run
 		// to stop, and early enough that pressing stop half a second in works.
 		yield { type: "start", runId: run.id }
 
+		// Claims the run for this attempt. `attempts` is what says a run has been
+		// picked up more than once, which is otherwise invisible.
+		await agentRepository.startAttempt(run.id)
+
 		const credential = await requireCredential(selection.provider)
 		const citations = new CitationCollector()
 		const ceiling = version.creditCeiling === null ? null : Number(version.creditCeiling)
+		const deadline = Date.now() + RUN_TIMEOUT_MS
 
-		let answer = ""
-		let credits = 0
-		let usage = { inputTokens: 0, outputTokens: 0 }
+		// Seeded only when this attempt *continues* what was already streamed — a
+		// resumed flow, or a tool loop carrying on past an approval. A retry of a
+		// failed loop re-asks the model from the beginning, and prefixing its
+		// answer with the dead attempt's text would show the same paragraph twice.
+		let answer = checkpoint && (checkpoint.graph || checkpoint.loop) ? checkpoint.output : ""
+		let credits = checkpoint?.credits ?? 0
+		let usage = checkpoint?.usage ?? { inputTokens: 0, outputTokens: 0 }
 		let failure: string | undefined
 		let stopped = false
 		let awaiting = false
-		let seq = 0
+		let timedOut = false
+		let exhausted = false
+		let seq = nextSeq(checkpoint)
 		let finished = false
-		let state: GraphState | null = null
+		let state: GraphState | null = checkpoint?.graph ?? null
 		let loopPause: LoopPause | null = null
 
 		const charge = async (input: ChargeInput) => {
-			const reference = `agent-run:${run.id}:step:${seq}`
+			const reference = chargeReference(run.id, seq)
 			const charged = await usageService.recordAndCharge({
 				workspaceId,
 				projectId: prepared.agent.projectId,
@@ -328,11 +388,18 @@ export const agentRunner = {
 					tokensEstimated: input.estimated,
 				},
 			})
-			credits += charged.credits
-			usage = {
-				inputTokens: usage.inputTokens + input.inputTokens,
-				outputTokens: usage.outputTokens + input.outputTokens,
+			// `alreadyApplied` is the database refusing a second charge on a
+			// reference it has seen — this call is work a dead attempt already paid
+			// for. Adding its credits again would not bill anyone twice, but it
+			// would push the run past its ceiling on money nobody spent.
+			if (!charged.alreadyApplied) {
+				credits += charged.credits
+				usage = {
+					inputTokens: usage.inputTokens + input.inputTokens,
+					outputTokens: usage.outputTokens + input.outputTokens,
+				}
 			}
+			if (ceiling !== null && credits >= ceiling) exhausted = true
 
 			await agentRepository.insertStep({
 				id: newId(),
@@ -387,6 +454,32 @@ export const agentRunner = {
 		 * exception, so nothing after the loop would run. The output already
 		 * streamed to the user would then exist nowhere (ADR-028).
 		 */
+		const snapshot = () =>
+			buildCheckpoint({
+				graph: state,
+				loop: loopPause,
+				seq,
+				credits,
+				usage,
+				output: answer,
+			}) as unknown as Record<string, unknown>
+
+		/**
+		 * Writes the checkpoint at a boundary the run can be picked up from.
+		 *
+		 * Only at boundaries — after a node, after a tool-loop round — never after
+		 * an individual charge. `seq` in the checkpoint is where a replay *starts*
+		 * numbering, so advancing it mid-node would give the interrupted node's
+		 * calls fresh references on the next attempt, and the ledger would have no
+		 * way to see they had already been paid for.
+		 */
+		const checkpointRun = async () => {
+			await agentRepository.updateRun(run.id, {
+				state: snapshot(),
+				credits: credits.toFixed(4),
+			})
+		}
+
 		const persist = async () => {
 			if (finished) return
 			finished = true
@@ -394,24 +487,39 @@ export const agentRunner = {
 			await agentRepository.updateRun(run.id, {
 				status: awaiting
 					? "awaiting_input"
-					: answer.length === 0 && !stopped
-						? "failed"
-						: stopped
-							? "stopped"
+					: stopped
+						? "stopped"
+						: failure || answer.length === 0
+							? "failed"
 							: "succeeded",
 				output: answer.length > 0 ? answer : null,
 				error: failure ? failure.slice(0, 500) : null,
 				credits: credits.toFixed(4),
-				...(state ? { state: state as unknown as Record<string, unknown> } : {}),
-				...(loopPause
-					? { state: { loop: loopPause } as unknown as Record<string, unknown> }
-					: {}),
+				// Written whatever the outcome, not only on a pause: a failed or
+				// stopped run is the case a retry has to carry on from.
+				state: snapshot(),
 				// A run still waiting for a person has not finished.
 				...(awaiting ? {} : { finishedAt: new Date() }),
 			})
 		}
 
-		const stopCheck = () => isStopRequested(workspaceId, run.id)
+		/**
+		 * The three ways a run stops between steps, as one check, because the
+		 * engine and the tool loop both take exactly one.
+		 *
+		 * Each of them stops the run at the next boundary and keeps what it has —
+		 * never mid-node, which would discard a provider call already paid for
+		 * (ADR-028).
+		 */
+		const stopCheck = async (): Promise<boolean> => {
+			if (exhausted) return true
+			if (Date.now() > deadline) {
+				timedOut = true
+				return true
+			}
+			return isStopRequested(workspaceId, run.id)
+		}
+
 		const mayContinue = async (): Promise<"ok" | "ceiling" | "no_credits"> => {
 			if (ceiling !== null && credits >= ceiling) return "ceiling"
 			const summary = await billingService.getSummary(workspaceId)
@@ -442,13 +550,13 @@ export const agentRunner = {
 
 				// The answers to a `user_input` node arrive as that node's values, so
 				// the node finds them already present and passes straight through.
-				const resumed = prepared.resume
+				const resumed = checkpoint?.graph
 					? {
-							...prepared.resume.state,
+							...checkpoint.graph,
 							values: {
-								...prepared.resume.state.values,
-								...(prepared.resume.state.pending
-									? { [prepared.resume.state.pending]: prepared.resume.answers }
+								...checkpoint.graph.values,
+								...(checkpoint.graph.pending
+									? { [checkpoint.graph.pending]: prepared.answers }
 									: {}),
 							},
 						}
@@ -493,6 +601,13 @@ export const agentRunner = {
 							prompt: event.prompt,
 							fields: event.fields,
 						}
+					} else if (event.type === "checkpoint") {
+						state = event.state
+						await checkpointRun()
+					} else if (event.type === "stopped") {
+						state = event.state
+						answer = event.state.output
+						stopped = true
 					} else if (event.type === "finished") {
 						state = event.state
 						if (event.output) answer = event.output
@@ -522,18 +637,35 @@ export const agentRunner = {
 						awaiting = true
 						loopPause = pause
 					},
-					resume:
-						prepared.resume?.approval && prepared.resume.state.loop
-							? {
-									approved: prepared.resume.approval.approved,
-									call: prepared.resume.approval.call,
-									messages: prepared.resume.state.loop.messages,
-								}
-							: null,
+					onCheckpoint: checkpointRun,
+					resume: checkpoint?.loop
+						? {
+								// Anything other than an explicit yes is a no. A pause
+								// that timed out, or an answer nobody understood, must
+								// not become permission to send the email.
+								approved: (prepared.answers.approve ?? "").trim().toLowerCase() === "yes",
+								call: checkpoint.loop.call,
+								messages: checkpoint.loop.messages,
+							}
+						: null,
 				})
 			}
 
-			if (await stopCheck()) stopped = true
+			// Which of the three bounds ended the run. All of them stop it at the
+			// same place — the next boundary, with the checkpoint kept — so what is
+			// being decided here is only what to call it, and a person asking for
+			// the run to stop outranks the machine's limits: they meant it, and a
+			// stop is not a failure. A timeout and a spent ceiling are, with a
+			// reason and a checkpoint to retry from.
+			if (await isStopRequested(workspaceId, run.id)) {
+				stopped = true
+			} else if (timedOut) {
+				stopped = false
+				failure ??= `This run passed its ${Math.round(RUN_TIMEOUT_MS / 60_000)}-minute limit and was stopped at its last checkpoint. Retry it to carry on.`
+			} else if (exhausted) {
+				stopped = false
+				failure ??= "This run reached its credit ceiling and was stopped."
+			}
 		} catch (error) {
 			failure = error instanceof Error ? error.message : "The run failed."
 			log.error("agent.run_failed", error, { workspaceId, runId: run.id })
@@ -581,6 +713,8 @@ export const agentRunner = {
 			onStopped: () => void
 			onFailure: (message: string) => void
 			onAwaiting: (pause: LoopPause) => void
+			/** Called at each round boundary — the tool loop's resumable point. */
+			onCheckpoint: () => Promise<void>
 			/** The approval decision, when this call is resuming a paused run. */
 			resume?: { approved: boolean; call: PendingCall; messages: ChatMessage[] } | null
 		},
@@ -751,6 +885,11 @@ export const agentRunner = {
 						toolCalls: event.charge.toolNames,
 					},
 				})
+				// A round is where this path can be picked up from. The conversation
+				// itself is not saved — only a pause for approval saves that (ADR-032)
+				// — so a retry re-asks the model, and the preserved step numbering is
+				// what stops the replay being charged for a second time.
+				await hooks.onCheckpoint()
 			} else if (event.type === "tool_charge") {
 				if (event.charge.usage) {
 					await hooks.charge({

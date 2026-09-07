@@ -115,6 +115,33 @@ export const agentController = {
 	},
 
 	/**
+	 * Queue the run for the worker instead of streaming it. 202 and a run id: the
+	 * client polls the run and its steps, which the runner writes as it goes.
+	 */
+	async queueRun(c: AppContext) {
+		const user = requireUser(c)
+		const membership = requireMembership(c)
+		const input = runAgentSchema.parse(await c.req.json())
+		return c.json(
+			await agentService.queueRun(
+				membership.organizationId,
+				requireParam(c, "agentId"),
+				input,
+				user.id,
+			),
+			202,
+		)
+	},
+
+	async retryRun(c: AppContext) {
+		const membership = requireMembership(c)
+		return c.json(
+			await agentService.retryRun(membership.organizationId, requireParam(c, "runId")),
+			202,
+		)
+	},
+
+	/**
 	 * Answer what a paused flow asked for, and carry on.
 	 *
 	 * The same SSE stream a run opens, on the same run row: it is one execution
