@@ -75,8 +75,10 @@ export interface ImagePlan {
 export function planTurnImages(
 	current: TurnAttachment[],
 	history: TurnAttachment[],
-	limit: number = MAX_TURN_IMAGES,
+	options: { limit?: number; canSeeImages?: boolean } = {},
 ): ImagePlan {
+	const limit = options.limit ?? MAX_TURN_IMAGES
+	const canSeeImages = options.canSeeImages ?? true
 	// Only an image can be sent as bytes. No chat model in this deployment takes
 	// audio on the wire — a recording reaches the model as its transcript or not
 	// at all — so audio never competes for an image slot, whether it is from this
@@ -89,11 +91,28 @@ export function planTurnImages(
 		...historyImages.filter((entry) => entry.extractedText !== null),
 		...spoken.filter((entry) => entry.extractedText !== null),
 	]
-	const candidates = [
+	const unread = [
 		...historyImages.filter((entry) => entry.extractedText === null),
 		...currentImages,
 	]
 
+	/*
+		A model that cannot see sends no bytes at all — including the images that
+		came from earlier turns.
+
+		The guard on the send only inspects *this* turn's attachments, because that
+		is the only thing the person is choosing right now. But a thread keeps its
+		pictures: once one had been sent, every later turn carried it again, and
+		switching the conversation to a text-only model then posted an image to a
+		provider that rejects the whole request. An earlier picture is context, not
+		the question, so it is dropped and the thread continues — with whatever text
+		was read out of it, which is already in `transcribed`.
+	*/
+	if (!canSeeImages) {
+		return { inline: [], transcribed, dropped: unread }
+	}
+
+	const candidates = unread
 	const keep = Math.max(0, limit)
 	return {
 		inline: keep === 0 ? [] : candidates.slice(-keep),

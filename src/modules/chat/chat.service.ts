@@ -616,6 +616,7 @@ export const chatService = {
 			workspaceId,
 			turn,
 			historyRows.map((row) => row.id),
+			definition?.vision === true,
 		)
 
 		const history = historyRows.map<ChatMessage>((row) => {
@@ -729,6 +730,7 @@ export const chatService = {
 		workspaceId: string,
 		turn: PreparedTurn,
 		historyMessageIds: string[],
+		canSeeImages: boolean,
 	): Promise<CarriedImages> {
 		const empty: CarriedImages = { byMessage: new Map(), current: [] }
 		if (turn.attachments.length === 0 && historyMessageIds.length === 0) return empty
@@ -743,12 +745,14 @@ export const chatService = {
 		const plan = planTurnImages(
 			turn.attachments.map(toTurnAttachment),
 			historyRows.map(toTurnAttachment),
+			{ canSeeImages },
 		)
 		if (plan.dropped.length > 0) {
 			log.info("chat.images_capped", {
 				conversationId: turn.conversation.id,
 				dropped: plan.dropped.length,
 				limit: MAX_TURN_IMAGES,
+				canSeeImages,
 			})
 		}
 

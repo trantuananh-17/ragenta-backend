@@ -20,6 +20,33 @@ function audio(id: string, extractedText: string | null = "spoken words"): TurnA
 const ids = (entries: TurnAttachment[]): string[] => entries.map((entry) => entry.id)
 
 describe("planTurnImages", () => {
+	/*
+		The regression that produced an OpenRouter 404 — "No endpoints found that
+		support image input" — on a conversation whose *earlier* turn had carried a
+		picture. The send-time guard only inspects the current turn's attachments,
+		so nothing else stops a thread's history from posting bytes to a model that
+		cannot read them.
+	*/
+	it("sends no bytes at all to a model that cannot see", () => {
+		const plan = planTurnImages([], [image("earlier")], { canSeeImages: false })
+		expect(plan.inline).toEqual([])
+		expect(plan.dropped.map((entry) => entry.id)).toEqual(["earlier"])
+	})
+
+	it("still replays what was read out of an earlier image", () => {
+		const plan = planTurnImages([], [image("receipt", "Total: 120.00")], {
+			canSeeImages: false,
+		})
+		expect(plan.inline).toEqual([])
+		expect(plan.transcribed.map((entry) => entry.id)).toEqual(["receipt"])
+	})
+
+	it("still carries a voice note's transcript to a model that cannot see", () => {
+		const plan = planTurnImages([audio("note", "xin chao")], [], { canSeeImages: false })
+		expect(plan.transcribed.map((entry) => entry.id)).toEqual(["note"])
+		expect(plan.inline).toEqual([])
+	})
+
 	it("sends nothing when the turn has no images at all", () => {
 		expect(planTurnImages([], [])).toEqual({ inline: [], transcribed: [], dropped: [] })
 	})
