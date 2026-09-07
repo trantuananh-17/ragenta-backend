@@ -7,6 +7,7 @@ import { paginationQuerySchema } from "../../shared/pagination"
 import {
 	agentConfigSchema,
 	createAgentSchema,
+	resumeRunSchema,
 	runAgentSchema,
 	updateAgentSchema,
 } from "./agent.dto"
@@ -111,6 +112,50 @@ export const agentController = {
 		return c.json(
 			await agentService.stopRun(membership.organizationId, requireParam(c, "runId")),
 		)
+	},
+
+	/**
+	 * Answer what a paused flow asked for, and carry on.
+	 *
+	 * The same SSE stream a run opens, on the same run row: it is one execution
+	 * that happened to wait for a person in the middle, and two rows would split
+	 * its credits and its steps between two things.
+	 */
+	async resumeRun(c: AppContext) {
+		const user = requireUser(c)
+		const membership = requireMembership(c)
+		const input = resumeRunSchema.parse(await c.req.json())
+
+		const prepared = await agentRunner.resume(
+			membership.organizationId,
+			requireParam(c, "runId"),
+			input.answers,
+			user.id,
+		)
+
+		c.header("X-Accel-Buffering", "no")
+		c.header("Cache-Control", "no-cache, no-transform")
+
+		return streamSSE(c, async (stream) => {
+			const controller = new AbortController()
+			stream.onAbort(() => controller.abort())
+
+			try {
+				for await (const event of agentRunner.stream(
+					membership.organizationId,
+					prepared,
+					controller.signal,
+				)) {
+					await stream.writeSSE({ event: event.type, data: JSON.stringify(event) })
+				}
+			} catch (error) {
+				const message = isAppError(error) ? error.message : "The run could not be completed."
+				await stream.writeSSE({
+					event: "error",
+					data: JSON.stringify({ type: "error", message }),
+				})
+			}
+		})
 	},
 
 	/**

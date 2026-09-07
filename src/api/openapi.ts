@@ -7,6 +7,7 @@ import { adjustCreditsSchema, adminListQuerySchema, setPlanSchema } from "../mod
 import {
 	agentConfigSchema,
 	createAgentSchema,
+	resumeRunSchema,
 	runAgentSchema,
 	updateAgentSchema,
 } from "../modules/agent/agent.dto"
@@ -537,6 +538,13 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary: "The steps of a run, in order, each with what it cost",
 		tags: ["Agents"],
 		access: "any member",
+	},
+	"POST /v1/workspaces/:workspaceId/agent-runs/:runId/resume": {
+		summary:
+			"Answer what a paused flow asked for and carry on, over SSE on the same run",
+		tags: ["Agents"],
+		access: "owner, admin, member",
+		body: resumeRunSchema,
 	},
 	"POST /v1/workspaces/:workspaceId/agent-runs/:runId/stop": {
 		summary:

@@ -137,6 +137,16 @@ export const agentVersion = pgTable(
 		 * means only `max_rounds` bounds the run.
 		 */
 		creditCeiling: numeric("credit_ceiling", { precision: 14, scale: 4 }),
+		/**
+		 * A flow, when this version is one (ADR-031). Null means the version is a
+		 * single prompt — which is what every version written before graphs existed
+		 * is, and what most agents will stay.
+		 *
+		 * Stored whole rather than as node and edge tables: it is read and written
+		 * in one piece by one screen, never queried across, and an immutable
+		 * version means it is never partially updated either.
+		 */
+		graph: jsonb("graph").$type<Record<string, unknown>>(),
 
 		createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -176,7 +186,7 @@ export const agentRun = pgTable(
 
 		/** manual | api | schedule. Only `manual` exists in Phase 1. */
 		trigger: text("trigger").default("manual").notNull(),
-		/** running | succeeded | failed | stopped. */
+		/** running | awaiting_input | succeeded | failed | stopped. */
 		status: text("status").default("running").notNull(),
 
 		input: jsonb("input").$type<Record<string, unknown>>().default({}).notNull(),
@@ -185,6 +195,15 @@ export const agentRun = pgTable(
 		error: text("error"),
 
 		credits: numeric("credits", { precision: 14, scale: 4 }).default("0").notNull(),
+
+		/**
+		 * Where a paused flow got to, so it can carry on after a person answers.
+		 *
+		 * Values only — completed nodes, what each produced, which node is waiting.
+		 * A run waiting on a human may wait for days and across a deploy, so
+		 * anything that could not survive a restart does not belong here.
+		 */
+		state: jsonb("state").$type<Record<string, unknown>>().default({}).notNull(),
 
 		startedAt: timestamp("started_at").defaultNow().notNull(),
 		finishedAt: timestamp("finished_at"),
@@ -195,7 +214,7 @@ export const agentRun = pgTable(
 		index("agentRun_agentId_createdAt_idx").on(table.agentId, table.createdAt),
 		check(
 			"agentRun_status_check",
-			sql`${table.status} in ('running', 'succeeded', 'failed', 'stopped')`,
+			sql`${table.status} in ('running', 'awaiting_input', 'succeeded', 'failed', 'stopped')`,
 		),
 		check("agentRun_trigger_check", sql`${table.trigger} in ('manual', 'api', 'schedule')`),
 	],
@@ -218,8 +237,10 @@ export const agentRunStep = pgTable(
 		seq: integer("seq").notNull(),
 		/** model | retrieval | tool. */
 		kind: text("kind").notNull(),
-		/** The tool's id on a `tool` step. Null on the others, which need no name. */
+		/** The tool's id on a `tool` step, or a node's label inside a flow. */
 		name: text("name"),
+		/** Which graph node made this call. Null outside a flow. */
+		nodeId: text("node_id"),
 		/** running | succeeded | failed. */
 		status: text("status").default("running").notNull(),
 

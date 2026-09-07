@@ -1,12 +1,6 @@
 import { findCatalogueModel, requireCredential } from "../../ai/catalogue"
 import { chatCapableClient } from "../../ai/clients"
-import type {
-	ChatCapableClient,
-	ChatMessage,
-	TokenUsage,
-	ToolCall,
-} from "../../ai/clients"
-import { estimateTokens } from "../../ai/tokens"
+import type { ChatCapableClient, ChatMessage, ProviderCredential } from "../../ai/clients"
 import type { MessageCitation } from "../../db/schema"
 import { EntitlementError, NotFoundError, ValidationError, isAppError } from "../../shared/errors"
 import { newId } from "../../shared/id"
@@ -23,13 +17,17 @@ import { agentRepository } from "./agent.repository"
 import type { AgentRow, AgentRunRow, AgentVersionRow } from "./agent.repository"
 import type { RunAgentInput } from "./agent.dto"
 import { CitationCollector } from "./citations"
-import { toDefinition, toolsFor } from "./tools"
-import type { AgentTool } from "./tools"
+import { agentGraphSchema } from "./graph/types"
+import type { GraphState } from "./graph/engine"
+import { runGraph } from "./graph/engine"
+import type { NodeContext } from "./graph/nodes"
+import { runToolLoop } from "./loop"
+import { toolsFor } from "./tools"
 import { clearStop, isStopRequested } from "./stop-signal"
 
 const log = logger.child({ module: "agent.runner" })
 
-/** The ceiling on what one round can produce, when the version sets none. */
+/** The ceiling on what one model call can produce, when the version sets none. */
 const DEFAULT_MAX_OUTPUT_TOKENS = 2_000
 
 /** For a model with no context window recorded. Small enough to be safe anywhere. */
@@ -42,18 +40,23 @@ const FALLBACK_CONTEXT_WINDOW = 32_000
  */
 const MINIMUM_CREDITS = 5_000
 
-/** How often a generating run asks whether it has been told to stop. */
-const STOP_POLL_MS = 300
-
-/**
- * The ceiling on rounds, whatever a version asks for. A version is validated
- * against this too; it is repeated here because the loop is the thing that can
- * actually run away.
- */
+/** The ceiling on rounds, whatever a version asks for. */
 const MAX_ROUNDS_LIMIT = 10
 
-/** How much of a tool's output is kept on the step row for the timeline. */
-const STEP_OUTPUT_LIMIT = 2_000
+/** One provider call to price, record and bill. `nodeId` is set inside a flow. */
+interface ChargeInput {
+	kind: "model" | "retrieval" | "tool"
+	nodeId?: string
+	name?: string
+	provider: string
+	model: string
+	operation: "agent" | "rerank" | "embedding"
+	inputTokens: number
+	outputTokens: number
+	estimated: boolean
+	payload?: Record<string, unknown>
+	output?: Record<string, unknown>
+}
 
 export interface PreparedRun {
 	agent: AgentRow
@@ -64,6 +67,8 @@ export interface PreparedRun {
 	selection: { provider: string; model: string }
 	input: RunAgentInput
 	actorId: string | null
+	/** Set when resuming: the state the paused run left behind. */
+	resume?: { state: GraphState; answers: Record<string, string> } | null
 }
 
 export type AgentStreamEvent =
@@ -77,24 +82,26 @@ export type AgentStreamEvent =
 	| { type: "round"; round: number; of: number }
 	| { type: "tool_started"; seq: number; name: string; arguments: string }
 	| { type: "tool_finished"; seq: number; name: string; ok: boolean; summary: string }
+	/** Flow runs only: which node is executing. */
+	| { type: "node_started"; nodeId: string; label: string; nodeType: string }
+	| { type: "node_finished"; nodeId: string; label: string; ok: boolean }
+	/** The flow is waiting for a person. The run is saved and the stream ends. */
+	| {
+			type: "awaiting_input"
+			runId: string
+			nodeId: string
+			prompt: string
+			fields: string[]
+		}
 	| { type: "delta"; text: string }
 	| {
 			type: "done"
 			runId: string
-			status: "succeeded" | "failed" | "stopped"
+			status: "succeeded" | "failed" | "stopped" | "awaiting_input"
 			credits: number
 			usage: { input: number; output: number }
 		}
 	| { type: "error"; message: string }
-
-/** One model call's outcome, before it has been charged. */
-interface Round {
-	text: string
-	toolCalls: ToolCall[]
-	usage: TokenUsage
-	/** What was sent, for the estimate a stopped round has to fall back on. */
-	promptText: string
-}
 
 export const agentRunner = {
 	/**
@@ -132,50 +139,7 @@ export const agentRunner = {
 		if (!run) throw new ValidationError("The run could not be started.")
 
 		try {
-			if (agent.status !== "active") {
-				throw new ValidationError(
-					`This agent is ${agent.status}. Activate it before running it.`,
-				)
-			}
-
-			const summary = await billingService.getSummary(workspaceId)
-			if (summary.credits.total < MINIMUM_CREDITS) {
-				throw new EntitlementError(
-					"INSUFFICIENT_CREDITS",
-					"This workspace does not have enough credits to run an agent.",
-					{ required: MINIMUM_CREDITS, available: summary.credits.total },
-				)
-			}
-
-			const selection =
-				version.provider && version.model
-					? { provider: version.provider, model: version.model }
-					: await modelService.resolveChatModel(
-							workspaceId,
-							agent.projectId ?? undefined,
-						)
-			// A version's stored override is re-checked rather than trusted: a
-			// workspace that downgraded still has a premium model saved on it, and
-			// that must fail loudly instead of quietly billing for it.
-			if (version.provider && version.model) {
-				await modelService.assertSelectable(workspaceId, selection, "chat")
-			}
-
-			const client = chatCapableClient(selection.provider)
-			if (!client?.streamChat) {
-				throw new ValidationError(
-					`This deployment cannot run chat with the ${selection.provider} provider.`,
-				)
-			}
-			// Publishing already refuses this combination. Checked again because a
-			// version can name no model at all and inherit one that changed since.
-			if (version.tools.length > 0 && !client.supportsTools) {
-				throw new ValidationError(
-					`The ${selection.provider} provider cannot call tools, and this agent is configured with ${version.tools.length} of them.`,
-				)
-			}
-
-			return { agent, version, run, client, selection, input, actorId }
+			return await this.check(workspaceId, agent, version, run, input, actorId)
 		} catch (error) {
 			await agentRepository.updateRun(run.id, {
 				status: "failed",
@@ -190,19 +154,102 @@ export const agentRunner = {
 	},
 
 	/**
+	 * Resumes a flow that stopped at a `user_input` node.
+	 *
+	 * The same run row rather than a new one: it is one execution of one version
+	 * that happened to wait for a person in the middle, and splitting it in two
+	 * would make its credits and its steps belong to two different things.
+	 */
+	async resume(
+		workspaceId: string,
+		runId: string,
+		answers: Record<string, string>,
+		actorId: string | null,
+	): Promise<PreparedRun> {
+		const run = await agentRepository.findRun(workspaceId, runId)
+		if (!run) throw new NotFoundError("Agent run")
+		if (run.status !== "awaiting_input") {
+			throw new ValidationError("This run is not waiting for an answer.")
+		}
+
+		const agent = await agentRepository.findById(workspaceId, run.agentId)
+		if (!agent) throw new NotFoundError("Agent")
+
+		// The version the run *started* on, not the agent's current one. A flow
+		// half-executed against one graph cannot finish against another.
+		const version = await agentRepository.findVersionById(run.agentVersionId)
+		if (!version) throw new NotFoundError("Agent version")
+
+		const state = run.state as unknown as GraphState
+		const input = { input: String((run.input as { input?: string }).input ?? "") }
+
+		await agentRepository.updateRun(run.id, { status: "running" })
+
+		return {
+			...(await this.check(workspaceId, agent, version, run, input, actorId)),
+			resume: { state, answers },
+		}
+	},
+
+	/** The refusals, shared by a fresh run and a resumed one. */
+	async check(
+		workspaceId: string,
+		agent: AgentRow,
+		version: AgentVersionRow,
+		run: AgentRunRow,
+		input: RunAgentInput,
+		actorId: string | null,
+	): Promise<PreparedRun> {
+		if (agent.status !== "active") {
+			throw new ValidationError(`This agent is ${agent.status}. Activate it before running it.`)
+		}
+
+		const summary = await billingService.getSummary(workspaceId)
+		if (summary.credits.total < MINIMUM_CREDITS) {
+			throw new EntitlementError(
+				"INSUFFICIENT_CREDITS",
+				"This workspace does not have enough credits to run an agent.",
+				{ required: MINIMUM_CREDITS, available: summary.credits.total },
+			)
+		}
+
+		const selection =
+			version.provider && version.model
+				? { provider: version.provider, model: version.model }
+				: await modelService.resolveChatModel(workspaceId, agent.projectId ?? undefined)
+		// A version's stored override is re-checked rather than trusted: a workspace
+		// that downgraded still has a premium model saved on it, and that must fail
+		// loudly instead of quietly billing for it.
+		if (version.provider && version.model) {
+			await modelService.assertSelectable(workspaceId, selection, "chat")
+		}
+
+		const client = chatCapableClient(selection.provider)
+		if (!client?.streamChat) {
+			throw new ValidationError(
+				`This deployment cannot run chat with the ${selection.provider} provider.`,
+			)
+		}
+		// Publishing already refuses this. Checked again because a version can name
+		// no model at all and inherit one that changed since.
+		if ((version.tools.length > 0 || version.graph) && !client.supportsTools) {
+			throw new ValidationError(
+				`The ${selection.provider} provider cannot call tools, which this agent needs.`,
+			)
+		}
+
+		return { agent, version, run, client, selection, input, actorId }
+	},
+
+	/**
 	 * Runs the agent, yielding events as they happen.
 	 *
-	 * Two shapes, one loop. An agent with no tools does exactly what a chat turn
-	 * does: retrieve once, answer once. An agent with tools retrieves nothing up
-	 * front and is given its tools instead, then runs model → tools → model until
-	 * it stops asking for tools, `max_rounds` is reached, or the run has spent its
-	 * credit ceiling.
-	 *
-	 * Billing is one `usage_ledger` row per provider call — every round, and every
-	 * tool that made a provider call of its own — keyed on
-	 * `agent-run:{runId}:step:{seq}`. That reference carries a unique index, so a
-	 * step charged twice is refused by the database rather than by this code
-	 * remembering not to (ADR-029).
+	 * Three shapes, one set of machinery. A version with a graph runs the flow
+	 * engine; one with tools runs the loop; one with neither retrieves once and
+	 * answers once, exactly as a chat turn does. What they share — charging a
+	 * `usage_ledger` row per provider call keyed `agent-run:{runId}:step:{seq}`,
+	 * the stop flag, and closing the run exactly once in a `finally` — lives here
+	 * rather than three times (ADR-029, ADR-031).
 	 */
 	async *stream(
 		workspaceId: string,
@@ -217,35 +264,21 @@ export const agentRunner = {
 
 		const credential = await requireCredential(selection.provider)
 		const citations = new CitationCollector()
-		const tools = toolsFor(version.tools, version.knowledgeBaseIds, citations)
-		const maxRounds = Math.min(Math.max(version.maxRounds, 1), MAX_ROUNDS_LIMIT)
 		const ceiling = version.creditCeiling === null ? null : Number(version.creditCeiling)
 
-		let messages: ChatMessage[] = []
 		let answer = ""
 		let credits = 0
-		let usage: TokenUsage = { inputTokens: 0, outputTokens: 0 }
+		let usage = { inputTokens: 0, outputTokens: 0 }
 		let failure: string | undefined
 		let stopped = false
+		let awaiting = false
 		let seq = 0
 		let finished = false
-		/** Set while a round is in flight, so a stopped run still charges for it. */
-		let inFlight: { promptText: string; text: string; usage: TokenUsage } | null = null
+		let state: GraphState | null = null
 
-		const chargeStep = async (input: {
-			kind: "model" | "retrieval" | "tool"
-			name?: string
-			provider: string
-			model: string
-			operation: "agent" | "rerank" | "embedding"
-			inputTokens: number
-			outputTokens: number
-			estimated: boolean
-			payload?: Record<string, unknown>
-			output?: Record<string, unknown>
-		}) => {
+		const charge = async (input: ChargeInput) => {
 			const reference = `agent-run:${run.id}:step:${seq}`
-			const charge = await usageService.recordAndCharge({
+			const charged = await usageService.recordAndCharge({
 				workspaceId,
 				projectId: prepared.agent.projectId,
 				userId: prepared.actorId,
@@ -260,10 +293,15 @@ export const agentRunner = {
 					agentVersion: version.version,
 					runId: run.id,
 					step: input.kind,
+					nodeId: input.nodeId ?? null,
 					tokensEstimated: input.estimated,
 				},
 			})
-			credits += charge.credits
+			credits += charged.credits
+			usage = {
+				inputTokens: usage.inputTokens + input.inputTokens,
+				outputTokens: usage.outputTokens + input.outputTokens,
+			}
 
 			await agentRepository.insertStep({
 				id: newId(),
@@ -271,12 +309,13 @@ export const agentRunner = {
 				seq,
 				kind: input.kind,
 				name: input.name ?? null,
+				nodeId: input.nodeId ?? null,
 				status: "succeeded",
 				provider: input.provider,
 				model: input.model,
 				inputTokens: input.inputTokens,
 				outputTokens: input.outputTokens,
-				credits: charge.credits.toFixed(4),
+				credits: charged.credits.toFixed(4),
 				usageReference: reference,
 				input: input.payload ?? {},
 				output: input.output ?? {},
@@ -286,7 +325,8 @@ export const agentRunner = {
 		}
 
 		/** A step that made no provider call — a tool that only read or fetched. */
-		const recordFreeStep = async (input: {
+		const record = async (input: {
+			nodeId?: string
 			name: string
 			ok: boolean
 			payload: Record<string, unknown>
@@ -298,6 +338,7 @@ export const agentRunner = {
 				seq,
 				kind: "tool",
 				name: input.name,
+				nodeId: input.nodeId ?? null,
 				status: input.ok ? "succeeded" : "failed",
 				input: input.payload,
 				output: input.output,
@@ -309,9 +350,9 @@ export const agentRunner = {
 		/**
 		 * Closes the run once, whatever ended it.
 		 *
-		 * In a `finally` rather than after the loop because a generator suspended
-		 * at a `yield` is closed with `.return()` when its consumer stops iterating
-		 * — a dropped connection, a closed tab — and a `return` completion is not an
+		 * In a `finally` rather than after the loop because a generator suspended at
+		 * a `yield` is closed with `.return()` when its consumer stops iterating — a
+		 * dropped connection, a closed tab — and a `return` completion is not an
 		 * exception, so nothing after the loop would run. The output already
 		 * streamed to the user would then exist nowhere (ADR-028).
 		 */
@@ -319,253 +360,140 @@ export const agentRunner = {
 			if (finished) return
 			finished = true
 
-			// A round cut off mid-stream never received the provider's usage frame,
-			// but the provider generated those tokens and charged Ragenta for them.
-			// Passing on nothing would make "stop" a way to read answers for free.
-			if (inFlight && (inFlight.text.length > 0 || inFlight.usage.inputTokens > 0)) {
-				const estimated =
-					inFlight.usage.inputTokens === 0 && inFlight.usage.outputTokens === 0
-				await chargeStep({
-					kind: "model",
-					provider: selection.provider,
-					model: selection.model,
-					operation: "agent",
-					inputTokens: estimated
-						? estimateTokens(inFlight.promptText)
-						: inFlight.usage.inputTokens,
-					outputTokens: estimated
-						? estimateTokens(inFlight.text)
-						: inFlight.usage.outputTokens,
-					estimated,
-					output: { characters: inFlight.text.length, stopped: true },
-				}).catch((error: unknown) => {
-					// Billing must not be the reason a saved answer is lost.
-					log.error("agent.charge_failed", error, { runId: run.id })
-				})
-				inFlight = null
-			}
-
 			await agentRepository.updateRun(run.id, {
-				status:
-					answer.length === 0 && !stopped ? "failed" : stopped ? "stopped" : "succeeded",
+				status: awaiting
+					? "awaiting_input"
+					: answer.length === 0 && !stopped
+						? "failed"
+						: stopped
+							? "stopped"
+							: "succeeded",
 				output: answer.length > 0 ? answer : null,
 				error: failure ? failure.slice(0, 500) : null,
 				credits: credits.toFixed(4),
-				finishedAt: new Date(),
+				...(state ? { state: state as unknown as Record<string, unknown> } : {}),
+				// A run still waiting for a person has not finished.
+				...(awaiting ? {} : { finishedAt: new Date() }),
 			})
 		}
 
+		const stopCheck = () => isStopRequested(workspaceId, run.id)
+		const mayContinue = async (): Promise<"ok" | "ceiling" | "no_credits"> => {
+			if (ceiling !== null && credits >= ceiling) return "ceiling"
+			const summary = await billingService.getSummary(workspaceId)
+			return summary.credits.total < MINIMUM_CREDITS ? "no_credits" : "ok"
+		}
+
 		try {
-			yield { type: "phase", phase: "retrieving" }
+			if (version.graph) {
+				const graph = agentGraphSchema.parse(version.graph)
 
-			// An agent that searches for itself pre-retrieves nothing: the first
-			// thing it does is choose what to search for, which is the whole point
-			// of giving it the tool.
-			const searchesItself = version.tools.includes("knowledge_search")
-			const context = searchesItself
-				? { messages: [] as ChatMessage[], missing: [] as string[], rerank: null }
-				: await this.gatherContext(workspaceId, prepared, citations)
-
-			if (context.missing.length > 0) {
-				yield {
-					type: "warning",
-					message: `${context.missing.length} knowledge base(s) this agent was configured with no longer exist and were skipped.`,
-				}
-			}
-
-			if (context.rerank && context.rerank.tokens > 0) {
-				await chargeStep({
-					kind: "retrieval",
-					provider: context.rerank.provider,
-					model: context.rerank.model,
-					operation: "rerank",
-					inputTokens: context.rerank.tokens,
-					outputTokens: 0,
-					estimated: context.rerank.estimated,
-					output: { citations: citations.size },
-				})
-			}
-
-			messages = searchesItself
-				? this.openingMessages(prepared, version.instructions)
-				: context.messages
-
-			if (citations.size > 0) yield { type: "citations", citations: citations.all() }
-
-			if (await isStopRequested(workspaceId, run.id)) {
-				stopped = true
-				return
-			}
-
-			yield { type: "phase", phase: "generating" }
-
-			for (let round = 1; round <= maxRounds; round += 1) {
-				if (tools.length > 0) yield { type: "round", round, of: maxRounds }
-
-				const promptText = messages.map((message) => message.content).join("\n")
-				inFlight = { promptText, text: "", usage: { inputTokens: 0, outputTokens: 0 } }
-
-				const outcome: Round = {
-					text: "",
-					toolCalls: [],
-					usage: { inputTokens: 0, outputTokens: 0 },
-					promptText,
-				}
-
-				let nextStopCheck = Date.now() + STOP_POLL_MS
-
-				for await (const event of prepared.client.streamChat(credential, {
-					model: selection.model,
-					messages,
-					temperature:
-						version.temperature === null ? undefined : Number(version.temperature),
-					maxTokens: version.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-					tools: tools.length > 0 ? tools.map(toDefinition) : undefined,
+				const context: NodeContext = {
+					workspaceId,
+					projectId: prepared.agent.projectId,
+					userId: prepared.actorId,
+					runId: run.id,
+					client: prepared.client,
+					credential: credential as ProviderCredential,
+					selection,
+					maxOutputTokens: version.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+					temperature: version.temperature === null ? undefined : Number(version.temperature),
+					knowledgeBaseIds: version.knowledgeBaseIds,
+					citations,
+					values: {},
 					signal,
+					charge,
+					record,
+				}
+
+				// The answers to a `user_input` node arrive as that node's values, so
+				// the node finds them already present and passes straight through.
+				const resumed = prepared.resume
+					? {
+							...prepared.resume.state,
+							values: {
+								...prepared.resume.state.values,
+								...(prepared.resume.state.pending
+									? { [prepared.resume.state.pending]: prepared.resume.answers }
+									: {}),
+							},
+						}
+					: null
+
+				yield { type: "phase", phase: "generating" }
+
+				for await (const event of runGraph({
+					graph,
+					context,
+					state: resumed,
+					input: prepared.input.input,
+					isStopped: stopCheck,
 				})) {
 					if (event.type === "delta") {
-						outcome.text += event.text
 						answer += event.text
-						inFlight.text = outcome.text
 						yield { type: "delta", text: event.text }
-					} else if (event.type === "tool_call") {
-						outcome.toolCalls.push(event.call)
-					} else {
-						outcome.usage = event.usage
-						inFlight.usage = event.usage
-					}
-
-					// Checked between tokens rather than per token: a Redis round trip
-					// on every delta would cost more than the generation it watches.
-					if (Date.now() >= nextStopCheck) {
-						nextStopCheck = Date.now() + STOP_POLL_MS
-						if (await isStopRequested(workspaceId, run.id)) {
-							stopped = true
-							break
+					} else if (event.type === "citations") {
+						yield { type: "citations", citations: citations.all() }
+					} else if (event.type === "node_started") {
+						yield event
+					} else if (event.type === "node_finished") {
+						yield event
+					} else if (event.type === "tool_started") {
+						yield { type: "tool_started", seq, name: event.name, arguments: event.arguments }
+					} else if (event.type === "tool_finished") {
+						yield {
+							type: "tool_finished",
+							seq: Math.max(seq - 1, 0),
+							name: event.name,
+							ok: event.ok,
+							summary: event.summary,
 						}
+					} else if (event.type === "awaiting_input") {
+						awaiting = true
+						state = event.state
+						answer = event.state.output
+						yield {
+							type: "awaiting_input",
+							runId: run.id,
+							nodeId: event.nodeId,
+							prompt: event.prompt,
+							fields: event.fields,
+						}
+					} else if (event.type === "finished") {
+						state = event.state
+						if (event.output) answer = event.output
+					} else {
+						state = event.state
+						failure = event.message
 					}
 				}
-
-				inFlight = null
-				usage = {
-					inputTokens: usage.inputTokens + outcome.usage.inputTokens,
-					outputTokens: usage.outputTokens + outcome.usage.outputTokens,
-				}
-
-				const estimated =
-					outcome.usage.inputTokens === 0 && outcome.usage.outputTokens === 0
-				await chargeStep({
-					kind: "model",
-					provider: selection.provider,
-					model: selection.model,
-					operation: "agent",
-					inputTokens: estimated
-						? estimateTokens(promptText)
-						: outcome.usage.inputTokens,
-					outputTokens: estimated ? estimateTokens(outcome.text) : outcome.usage.outputTokens,
-					estimated,
-					output: {
-						characters: outcome.text.length,
-						toolCalls: outcome.toolCalls.map((call) => call.name),
+			} else {
+				yield* this.runSingle(workspaceId, prepared, {
+					citations,
+					charge,
+					record,
+					stopCheck,
+					mayContinue,
+					signal,
+					onDelta: (text) => {
+						answer += text
+					},
+					onStopped: () => {
+						stopped = true
+					},
+					onFailure: (message) => {
+						failure = message
 					},
 				})
-
-				if (stopped || outcome.toolCalls.length === 0) break
-
-				// The round asked for tools, so the model's own turn has to go into
-				// the history before their results do, or the provider rejects a
-				// result answering a call it cannot see.
-				messages = [
-					...messages,
-					{ role: "assistant", content: outcome.text, toolCalls: outcome.toolCalls },
-				]
-
-				for (const call of outcome.toolCalls) {
-					yield {
-						type: "tool_started",
-						seq,
-						name: call.name,
-						arguments: call.arguments.slice(0, 500),
-					}
-
-					const result = await this.runTool(tools, call, {
-						workspaceId,
-						projectId: prepared.agent.projectId,
-						userId: prepared.actorId,
-						runId: run.id,
-						stepSeq: seq,
-						signal,
-					})
-
-					if (result.usage) {
-						await chargeStep({
-							kind: "tool",
-							name: call.name,
-							provider: result.usage.provider,
-							model: result.usage.model,
-							operation: result.usage.operation,
-							inputTokens: result.usage.inputTokens,
-							outputTokens: result.usage.outputTokens,
-							estimated: false,
-							payload: { arguments: call.arguments.slice(0, STEP_OUTPUT_LIMIT) },
-							output: result.metadata ?? {},
-						})
-					} else {
-						await recordFreeStep({
-							name: call.name,
-							ok: result.ok,
-							payload: { arguments: call.arguments.slice(0, STEP_OUTPUT_LIMIT) },
-							output: {
-								...(result.metadata ?? {}),
-								preview: result.content.slice(0, STEP_OUTPUT_LIMIT),
-							},
-						})
-					}
-
-					yield {
-						type: "tool_finished",
-						seq: seq - 1,
-						name: call.name,
-						ok: result.ok,
-						summary: result.content.slice(0, 200),
-					}
-
-					messages = [
-						...messages,
-						{
-							role: "tool",
-							content: result.content,
-							toolCallId: call.id,
-							name: call.name,
-						},
-					]
-				}
-
-				if (citations.size > 0) yield { type: "citations", citations: citations.all() }
-
-				// Between rounds, not only before the run: a loop that started
-				// affordable can stop being so, and the balance is the one limit that
-				// is not this workspace's to set.
-				if (ceiling !== null && credits >= ceiling) {
-					failure = `This run reached its ceiling of ${ceiling} credits and was stopped.`
-					break
-				}
-				const summary = await billingService.getSummary(workspaceId)
-				if (summary.credits.total < MINIMUM_CREDITS) {
-					failure = "This workspace ran out of credits part-way through the run."
-					break
-				}
-				if (await isStopRequested(workspaceId, run.id)) {
-					stopped = true
-					break
-				}
 			}
+
+			if (await stopCheck()) stopped = true
 		} catch (error) {
 			failure = error instanceof Error ? error.message : "The run failed."
 			log.error("agent.run_failed", error, { workspaceId, runId: run.id })
 		} finally {
 			await persist()
-			await clearStop(workspaceId, run.id)
+			if (!awaiting) await clearStop(workspaceId, run.id)
 		}
 
 		if (answer.length === 0 && failure) {
@@ -576,64 +504,172 @@ export const agentRunner = {
 		yield {
 			type: "done",
 			runId: run.id,
-			status: stopped ? "stopped" : failure ? "failed" : "succeeded",
+			status: awaiting
+				? "awaiting_input"
+				: stopped
+					? "stopped"
+					: failure
+						? "failed"
+						: "succeeded",
 			credits,
 			usage: { input: usage.inputTokens, output: usage.outputTokens },
 		}
 	},
 
 	/**
-	 * Executes one call the model asked for.
-	 *
-	 * Both failure modes answer the *model* rather than throwing: a tool it
-	 * invented and arguments that do not validate are things it can correct on the
-	 * next round, and ending the run would throw away everything already done.
+	 * The non-graph path: retrieve (unless the agent searches for itself), then
+	 * run the tool loop. With no tools and `maxRounds` of 1 that is exactly one
+	 * model call, which is a Phase 1 agent.
 	 */
-	async runTool(
-		tools: AgentTool[],
-		call: ToolCall,
-		context: {
-			workspaceId: string
-			projectId: string | null
-			userId: string | null
-			runId: string
-			stepSeq: number
+	async *runSingle(
+		workspaceId: string,
+		prepared: PreparedRun,
+		hooks: {
+			citations: CitationCollector
+			charge: (input: ChargeInput) => Promise<void>
+			record: (input: { name: string; ok: boolean; payload: Record<string, unknown>; output: Record<string, unknown> }) => Promise<void>
+			stopCheck: () => Promise<boolean>
+			mayContinue: () => Promise<"ok" | "ceiling" | "no_credits">
 			signal?: AbortSignal
+			onDelta: (text: string) => void
+			onStopped: () => void
+			onFailure: (message: string) => void
 		},
-	) {
-		const tool = tools.find((candidate) => candidate.name === call.name)
-		if (!tool) {
-			return {
-				ok: false,
-				content: `There is no tool called "${call.name}". The tools you have are the ones listed for you.`,
-				metadata: { error: "unknown_tool" },
-				usage: undefined,
+	): AsyncGenerator<AgentStreamEvent> {
+		const { version, selection } = prepared
+		const credential = await requireCredential(selection.provider)
+		const searchesItself = version.tools.includes("knowledge_search")
+
+		yield { type: "phase", phase: "retrieving" }
+
+		const context = searchesItself
+			? { messages: [] as ChatMessage[], missing: [] as string[], rerank: null }
+			: await this.gatherContext(workspaceId, prepared, hooks.citations)
+
+		if (context.missing.length > 0) {
+			yield {
+				type: "warning",
+				message: `${context.missing.length} knowledge base(s) this agent was configured with no longer exist and were skipped.`,
 			}
 		}
 
-		let args: unknown
-		try {
-			args = JSON.parse(call.arguments || "{}")
-		} catch {
-			return {
-				ok: false,
-				content: "Those arguments were not valid JSON. Send the arguments again as a JSON object.",
-				metadata: { error: "invalid_json" },
-				usage: undefined,
-			}
+		if (context.rerank && context.rerank.tokens > 0) {
+			await hooks.charge({
+				kind: "retrieval",
+				provider: context.rerank.provider,
+				model: context.rerank.model,
+				operation: "rerank",
+				inputTokens: context.rerank.tokens,
+				outputTokens: 0,
+				estimated: context.rerank.estimated,
+				output: { citations: hooks.citations.size },
+			})
 		}
 
-		try {
-			return await tool.execute(context, args)
-		} catch (error) {
-			log.error("agent.tool_failed", error, { runId: context.runId, tool: call.name })
-			return {
-				ok: false,
-				content: isAppError(error)
-					? error.message
-					: `The ${call.name} tool failed. Try a different approach.`,
-				metadata: { error: "tool_failed" },
-				usage: undefined,
+		const messages = searchesItself
+			? this.openingMessages(prepared, version.instructions)
+			: context.messages
+
+		if (hooks.citations.size > 0) {
+			yield { type: "citations", citations: hooks.citations.all() }
+		}
+
+		if (await hooks.stopCheck()) {
+			hooks.onStopped()
+			return
+		}
+
+		yield { type: "phase", phase: "generating" }
+
+		const tools = toolsFor(version.tools, version.knowledgeBaseIds, hooks.citations)
+		let seqForTools = 0
+
+		for await (const event of runToolLoop(messages, {
+			client: prepared.client,
+			credential,
+			model: selection.model,
+			temperature: version.temperature === null ? undefined : Number(version.temperature),
+			maxTokens: version.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+			tools,
+			maxRounds: Math.min(Math.max(version.maxRounds, 1), MAX_ROUNDS_LIMIT),
+			toolContext: {
+				workspaceId,
+				projectId: prepared.agent.projectId,
+				userId: prepared.actorId,
+				runId: prepared.run.id,
+				signal: hooks.signal,
+			},
+			isStopped: hooks.stopCheck,
+			mayContinue: hooks.mayContinue,
+			signal: hooks.signal,
+		})) {
+			if (event.type === "delta") {
+				hooks.onDelta(event.text)
+				yield { type: "delta", text: event.text }
+			} else if (event.type === "round") {
+				yield { type: "round", round: event.round, of: event.of }
+			} else if (event.type === "tool_started") {
+				yield {
+					type: "tool_started",
+					seq: seqForTools,
+					name: event.name,
+					arguments: event.arguments,
+				}
+			} else if (event.type === "tool_finished") {
+				yield {
+					type: "tool_finished",
+					seq: seqForTools++,
+					name: event.name,
+					ok: event.ok,
+					summary: event.summary,
+				}
+				if (hooks.citations.size > 0) {
+					yield { type: "citations", citations: hooks.citations.all() }
+				}
+			} else if (event.type === "round_finished") {
+				await hooks.charge({
+					kind: "model",
+					provider: selection.provider,
+					model: selection.model,
+					operation: "agent",
+					inputTokens: event.charge.inputTokens,
+					outputTokens: event.charge.outputTokens,
+					estimated: event.charge.estimated,
+					output: {
+						characters: event.charge.text.length,
+						toolCalls: event.charge.toolNames,
+					},
+				})
+			} else if (event.type === "tool_charge") {
+				if (event.charge.usage) {
+					await hooks.charge({
+						kind: "tool",
+						name: event.charge.name,
+						provider: event.charge.usage.provider,
+						model: event.charge.usage.model,
+						operation: event.charge.usage.operation,
+						inputTokens: event.charge.usage.inputTokens,
+						outputTokens: event.charge.usage.outputTokens,
+						estimated: false,
+						payload: { arguments: event.charge.arguments },
+						output: event.charge.metadata,
+					})
+				} else {
+					await hooks.record({
+						name: event.charge.name,
+						ok: event.charge.ok,
+						payload: { arguments: event.charge.arguments },
+						output: { ...event.charge.metadata, preview: event.charge.content },
+					})
+				}
+			} else if (event.type === "finished") {
+				if (event.reason === "stopped") hooks.onStopped()
+				if (event.reason === "ceiling") {
+					hooks.onFailure("This run reached its credit ceiling and was stopped.")
+				}
+				if (event.reason === "no_credits") {
+					hooks.onFailure("This workspace ran out of credits part-way through the run.")
+				}
 			}
 		}
 	},

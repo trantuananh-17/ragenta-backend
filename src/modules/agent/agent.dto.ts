@@ -1,5 +1,7 @@
 import { z } from "zod"
 
+import { agentGraphSchema } from "./graph/types"
+
 const modelSelectionSchema = z.object({
 	provider: z.string().trim().min(1),
 	model: z.string().trim().min(1),
@@ -50,6 +52,15 @@ export const agentConfigSchema = z.object({
 	 * exists to avoid. Ignored by an agent with no knowledge base.
 	 */
 	groundedOnly: z.boolean().default(true),
+	/**
+	 * A flow, when this version is one. Null keeps the version a single prompt,
+	 * which is what every agent built before flows existed is.
+	 *
+	 * Validated structurally at publish time — a dangling edge is a mistake
+	 * someone can fix while looking at the canvas, and the same mistake found
+	 * mid-run is a failed run and a charged model call.
+	 */
+	graph: agentGraphSchema.nullable().default(null),
 })
 
 export const createAgentSchema = z.object({
@@ -84,7 +95,13 @@ export const runAgentSchema = z.object({
 	documentIds: z.array(z.string().min(1)).max(50).optional(),
 })
 
+/** The answers a paused flow was waiting for, keyed by the field it asked for. */
+export const resumeRunSchema = z.object({
+	answers: z.record(z.string().min(1).max(60), z.string().max(4_000)),
+})
+
 export type AgentConfigInput = z.infer<typeof agentConfigSchema>
 export type CreateAgentInput = z.infer<typeof createAgentSchema>
 export type UpdateAgentInput = z.infer<typeof updateAgentSchema>
 export type RunAgentInput = z.infer<typeof runAgentSchema>
+export type ResumeRunInput = z.infer<typeof resumeRunSchema>

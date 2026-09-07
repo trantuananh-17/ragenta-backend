@@ -84,6 +84,16 @@ export const agentRepository = {
 		return rows[0]
 	},
 
+	/** By primary key, for a resumed run that must use the version it started on. */
+	async findVersionById(versionId: string, executor: DbExecutor = db) {
+		const rows = await executor
+			.select()
+			.from(agentVersion)
+			.where(eq(agentVersion.id, versionId))
+			.limit(1)
+		return rows[0]
+	},
+
 	/**
 	 * The next version number, read inside the caller's transaction. The unique
 	 * index on `(agent_id, version)` is what actually prevents two concurrent

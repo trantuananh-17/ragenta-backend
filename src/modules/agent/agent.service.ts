@@ -10,6 +10,7 @@ import { auditService } from "../audit/audit.service"
 import { knowledgeService } from "../knowledge/knowledge.service"
 import { modelService } from "../model/model.service"
 import { agentRepository } from "./agent.repository"
+import { validateGraph } from "./graph/types"
 import { TOOL_CATALOGUE, TOOL_IDS, isToolId } from "./tools"
 import type { AgentConfigInput, CreateAgentInput, UpdateAgentInput } from "./agent.dto"
 import { requestStop } from "./stop-signal"
@@ -50,12 +51,22 @@ async function versionValues(
 		)
 	}
 
+	if (config.graph) {
+		const problems = validateGraph(config.graph)
+		if (problems.length > 0) {
+			throw new ValidationError(`This flow cannot be published. ${problems.join(" ")}`)
+		}
+	}
+
 	/**
 	 * A tool-using agent is refused at publish time on a provider that cannot call
 	 * tools, rather than at run time. The failure is otherwise invisible: the model
 	 * answers in prose, never calls anything, and looks merely unhelpful.
+	 *
+	 * A flow's nodes call tools even when the version's own tool list is empty, so
+	 * the check covers both.
 	 */
-	if (config.tools.length > 0) {
+	if (config.tools.length > 0 || config.graph) {
 		const selection =
 			config.model ?? (await modelService.resolveChatModel(workspaceId, projectId ?? undefined))
 		const client = chatCapableClient(selection.provider)
@@ -83,6 +94,7 @@ async function versionValues(
 		rerankProvider: config.rerank?.provider ?? null,
 		rerankModel: config.rerank?.model ?? null,
 		groundedOnly: config.groundedOnly,
+		graph: config.graph,
 		tools: config.tools,
 		maxRounds: config.maxRounds,
 		creditCeiling: config.creditCeiling?.toFixed(4) ?? null,

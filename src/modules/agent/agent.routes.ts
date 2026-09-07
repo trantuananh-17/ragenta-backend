@@ -56,6 +56,12 @@ agentRoutes.post(
 agentRoutes.get("/:workspaceId/agent-runs/:runId", workspaceScope, agentController.getRun)
 agentRoutes.get("/:workspaceId/agent-runs/:runId/steps", workspaceScope, agentController.listSteps)
 agentRoutes.post(
+	"/:workspaceId/agent-runs/:runId/resume",
+	workspaceScope,
+	contributor,
+	agentController.resumeRun,
+)
+agentRoutes.post(
 	"/:workspaceId/agent-runs/:runId/stop",
 	workspaceScope,
 	contributor,
