@@ -219,8 +219,18 @@ export const agentRun = pgTable(
 		/** Null when a schedule or an API key started the run, not a person. */
 		userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
 
-		/** manual | api | schedule. Only `manual` exists in Phase 1. */
+		/** manual | api | schedule | webhook | widget | comparison. */
 		trigger: text("trigger").default("manual").notNull(),
+		/**
+		 * The comparison this run belongs to, when it is one of a set.
+		 *
+		 * A plain column shared by the runs of one comparison rather than a table of
+		 * its own: a comparison *is* its runs — it holds no state they do not
+		 * already carry, and the output, the credits, the duration and the steps are
+		 * all on the run rows already. A `comparison` table would exist only to have
+		 * a primary key (ADR-069).
+		 */
+		comparisonId: text("comparison_id"),
 		/**
 		 * The embedded widget that caused this run, when one did.
 		 *
@@ -291,8 +301,10 @@ export const agentRun = pgTable(
 		),
 		check(
 			"agentRun_trigger_check",
-			sql`${table.trigger} in ('manual', 'api', 'schedule', 'webhook', 'widget')`,
+			sql`${table.trigger} in ('manual', 'api', 'schedule', 'webhook', 'widget', 'comparison')`,
 		),
+		// The comparison's own read: the runs of one comparison, and nothing else.
+		index("agentRun_comparisonId_idx").on(table.comparisonId),
 	],
 )
 

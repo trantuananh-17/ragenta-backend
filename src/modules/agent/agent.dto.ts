@@ -139,6 +139,20 @@ export const resumeRunSchema = z.object({
 })
 
 /**
+ * One input, run against several versions.
+ *
+ * Two to four. One is not a comparison, and every version named is a real run
+ * that spends real credits — so the bound is there to stop somebody comparing
+ * twelve versions of a premium model on one click and finding out afterwards.
+ */
+export const compareVersionsSchema = z.object({
+	input: z.string().trim().min(1).max(8_000),
+	versions: z.array(z.number().int().positive()).min(2).max(4),
+})
+
+export type CompareVersionsInput = z.infer<typeof compareVersionsSchema>
+
+/**
  * Which two versions to compare. Both required rather than defaulting to "the
  * previous one": a diff whose left-hand side was guessed is one somebody reads
  * the wrong way round.
