@@ -41,6 +41,14 @@ export interface RecordUsageInput {
 	 * request id. Must be stable across retries of the same logical operation.
 	 */
 	reference: string
+	/**
+	 * How long the provider took, in milliseconds.
+	 *
+	 * Optional, and absent means absent rather than zero: a percentile computed
+	 * over a column where "unknown" is written as 0 is dragged toward a number
+	 * nothing actually took (ADR-063).
+	 */
+	durationMs?: number
 	metadata?: Record<string, unknown>
 	/**
 	 * Set for `speech` and for nothing else. Its presence is what routes the
@@ -96,6 +104,7 @@ export const usageService = {
 					embeddingTokens: input.embeddingTokens ?? 0,
 					credits: credits.toFixed(4),
 					pricingVersion,
+					durationMs: input.durationMs ?? null,
 					reference: input.reference,
 					metadata: input.metadata ?? {},
 				},

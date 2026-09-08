@@ -34,6 +34,7 @@ import {
 	withExtractedText,
 } from "./attachments"
 import type { TurnAttachment } from "./attachments"
+import { errorLogService } from "../observability/error-log.service"
 import { chatRepository } from "./chat.repository"
 import type { AttachmentRow, ConversationRow } from "./chat.repository"
 import { assemblePrompt } from "./prompt"
@@ -99,6 +100,14 @@ export interface PreparedTurn {
 	userMessageId: string
 	assistantMessageId: string
 	actorId: string
+	/**
+	 * When this turn began, for the latency recorded on its usage row.
+	 *
+	 * Taken at preparation rather than at the first token, because what a
+	 * customer waits for is the whole answer — and time-to-first-token is the
+	 * number a provider's own dashboard already shows (ADR-063).
+	 */
+	startedAt: number
 }
 
 /** Retrieval and prompt assembly, which happen after the stream has opened. */
@@ -475,6 +484,7 @@ export const chatService = {
 			userMessageId,
 			assistantMessageId,
 			actorId,
+			startedAt: Date.now(),
 		}
 	},
 
@@ -956,6 +966,10 @@ export const chatService = {
 				model: turn.selection.model,
 				inputTokens: billed.inputTokens,
 				outputTokens: billed.outputTokens,
+				// Wall clock across the whole stream, which is the number a customer
+				// experiences — not the time to the first token, which is the one a
+				// provider's own dashboard shows and nobody waits for.
+				durationMs: Date.now() - turn.startedAt,
 				reference: `chat:${turn.assistantMessageId}`,
 				metadata: {
 					conversationId: turn.conversation.id,
@@ -1071,6 +1085,19 @@ export const chatService = {
 			log.error("chat.stream_failed", error, {
 				workspaceId,
 				conversationId: turn.conversation.id,
+			})
+			// A provider that refused mid-stream writes no usage row — nothing was
+			// billed — so without this the failure survives only as a log line
+			// nobody correlates with the day somebody says chat stopped working
+			// (ADR-063). A refusal for credits or a missing adapter is deliberately
+			// *not* recorded here: that is a domain decision, not a provider fault.
+			await errorLogService.record({
+				workspaceId,
+				provider: turn.selection.provider,
+				model: turn.selection.model,
+				operation: "chat",
+				message: failure,
+				durationMs: Date.now() - turn.startedAt,
 			})
 		} finally {
 			await persist()

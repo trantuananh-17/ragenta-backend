@@ -60,6 +60,17 @@ export const usageLedger = pgTable(
 		/** The pricing table version this row was priced with. */
 		pricingVersion: text("pricing_version").notNull(),
 
+		/**
+		 * How long the provider took, in milliseconds.
+		 *
+		 * Nullable because rows written before this column existed have no honest
+		 * value, and a zero would be a lie that skews every percentile computed
+		 * over them. An agent run's latency is already derivable from
+		 * `agent_run_step.started_at`/`finished_at`; a chat turn has no step, which
+		 * is the gap this closes (ADR-063).
+		 */
+		durationMs: integer("duration_ms"),
+
 		/** Shared with the matching credit_transaction rows. */
 		reference: text("reference").notNull(),
 		metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}).notNull(),

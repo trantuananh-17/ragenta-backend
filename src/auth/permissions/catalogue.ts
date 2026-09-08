@@ -690,6 +690,14 @@ const PLATFORM_PERMISSIONS = [
 	},
 
 	{
+		key: "admin.errors.read",
+		scope: "platform",
+		resource: "admin.errors",
+		action: "read",
+		description: "Read the log of provider calls that failed",
+	},
+
+	{
 		key: "admin.audit.read",
 		scope: "platform",
 		resource: "admin.audit",
@@ -871,6 +879,7 @@ const PLATFORM_SYSTEM_ROLES = [
 			"admin.mcp.read",
 			"admin.oauth.read",
 			"admin.role.read",
+			"admin.errors.read",
 			"admin.audit.read",
 			"admin.setting.read",
 		],
@@ -910,6 +919,7 @@ const PLATFORM_SYSTEM_ROLES = [
 			"admin.mcp.read",
 			"admin.oauth.read",
 			"admin.role.read",
+			"admin.errors.read",
 			"admin.audit.read",
 			"admin.setting.read",
 		],

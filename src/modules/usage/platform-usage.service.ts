@@ -1,4 +1,5 @@
 import type { PlatformUsageQuery } from "./platform-usage.dto"
+import { errorLogService } from "../observability/error-log.service"
 import { platformUsageRepository } from "./platform-usage.repository"
 
 /**
@@ -12,13 +13,16 @@ import { platformUsageRepository } from "./platform-usage.repository"
 
 export const platformUsageService = {
 	async overview({ from, to, limit }: PlatformUsageQuery) {
-		const [totals, models, operations, workspaces, daily] = await Promise.all([
-			platformUsageRepository.totals(from, to),
-			platformUsageRepository.byModel(from, to),
-			platformUsageRepository.byOperation(from, to),
-			platformUsageRepository.byWorkspace(from, to, limit),
-			platformUsageRepository.daily(from, to),
-		])
+		const [totals, models, operations, workspaces, daily, latency, failures] =
+			await Promise.all([
+				platformUsageRepository.totals(from, to),
+				platformUsageRepository.byModel(from, to),
+				platformUsageRepository.byOperation(from, to),
+				platformUsageRepository.byWorkspace(from, to, limit),
+				platformUsageRepository.daily(from, to),
+				platformUsageRepository.latency(from, to),
+				errorLogService.summarise(from, to),
+			])
 
 		return {
 			range: { from: from.toISOString(), to: to.toISOString() },
@@ -27,6 +31,11 @@ export const platformUsageService = {
 			operations,
 			workspaces,
 			daily,
+			latency,
+			// Beside the spend deliberately: "what is this costing" and "what is
+			// failing" are read at the same moment, and putting them on two screens
+			// means the second one is the one nobody opens.
+			failures,
 		}
 	},
 
