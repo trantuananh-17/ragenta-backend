@@ -2,6 +2,7 @@ import { Worker } from "bullmq"
 import type { Job } from "bullmq"
 
 import { JOB_SCAN_AUTO_RELOAD, JOB_SCAN_PLAN_REFILLS } from "../jobs/billing.jobs"
+import { JOB_SCAN_TRIGGERS } from "../jobs/trigger.jobs"
 import { QUEUE_AGENT, QUEUE_BILLING, QUEUE_INGESTION, getQueue } from "../queue/queues"
 import { createRedisConnection } from "../redis/client"
 import { logger } from "../shared/logger"
@@ -108,6 +109,14 @@ export async function registerSchedules(): Promise<void> {
 		JOB_SCAN_AUTO_RELOAD,
 		{},
 		{ repeat: { pattern: "*/5 * * * *" }, jobId: JOB_SCAN_AUTO_RELOAD },
+	)
+
+	// Every minute, on the agent queue: a schedule cannot fire sooner than the
+	// scan looks, which is why `schedule.ts` refuses a six-field expression.
+	await getQueue(QUEUE_AGENT).add(
+		JOB_SCAN_TRIGGERS,
+		{},
+		{ repeat: { pattern: "* * * * *" }, jobId: JOB_SCAN_TRIGGERS },
 	)
 
 	log.info("schedules.registered")

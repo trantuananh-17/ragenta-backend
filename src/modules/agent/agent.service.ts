@@ -427,7 +427,14 @@ export const agentService = {
 		workspaceId: string,
 		agentId: string,
 		input: RunAgentInput,
-		actorId: string,
+		actorId: string | null,
+		/**
+		 * Who asked. A trigger fires with no person behind it, and recording that
+		 * honestly is what lets a run list say "this one ran itself" — attributing
+		 * it to whoever created the trigger would put somebody's name on a run they
+		 * were asleep for.
+		 */
+		trigger: "manual" | "api" | "schedule" | "webhook" = "manual",
 	) {
 		const agent = await agentRepository.findById(workspaceId, agentId)
 		if (!agent) throw new NotFoundError("Agent")
@@ -445,7 +452,7 @@ export const agentService = {
 			agentVersionId: version.id,
 			projectId: agent.projectId,
 			userId: actorId,
-			trigger: "manual",
+			trigger,
 			status: "pending",
 			input: { input: input.input, documentIds: input.documentIds ?? [] },
 		})
