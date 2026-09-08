@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { platformUsageQuerySchema } from "./platform-usage.service"
+import { platformUsageQuerySchema } from "./platform-usage.dto"
 
 function parse(query: Record<string, string>) {
 	return platformUsageQuerySchema.parse(query)

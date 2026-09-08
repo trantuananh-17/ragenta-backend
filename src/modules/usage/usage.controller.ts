@@ -3,7 +3,8 @@ import { z } from "zod"
 import type { AppContext } from "../../api/types"
 import { requireMembership } from "../../api/types"
 import { paginationQuerySchema } from "../../shared/pagination"
-import { platformUsageQuerySchema, platformUsageService } from "./platform-usage.service"
+import { platformUsageQuerySchema } from "./platform-usage.dto"
+import { platformUsageService } from "./platform-usage.service"
 import { usageService } from "./usage.service"
 
 const usageQuerySchema = z.object({

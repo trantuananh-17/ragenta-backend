@@ -52,7 +52,7 @@ import {
 	synthesizeSpeechSchema,
 	transcribeAttachmentSchema,
 } from "../modules/speech/speech.dto"
-import { platformUsageQuerySchema } from "../modules/usage/platform-usage.service"
+import { platformUsageQuerySchema } from "../modules/usage/platform-usage.dto"
 import {
 	createWorkspaceSchema,
 	inviteMemberSchema,

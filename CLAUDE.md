@@ -30,7 +30,10 @@ routes → controller → service → repository → db
 ```
 
 - **Routes** are the authorization map. Every `:workspaceId` route carries `workspaceScope`;
-  role-restricted ones also carry `requireWorkspaceRole(...)`.
+  restricted ones also carry `requirePermission("project.create")`, or
+  `requireResourcePermission(...)` where the path names the project, knowledge base or agent the
+  permission is answered about. `requireWorkspaceRole` is gone — permissions are rows now
+  (ADR-046..050), and the keys live in `src/auth/permissions/catalogue.ts`.
 - **Controllers** validate with a zod DTO, call exactly one service method, shape the response.
   No queries, no role checks, no business branching.
 - **Services** hold the rules, own transactions, write the audit trail. They must not import
@@ -56,7 +59,10 @@ them and neither is workspace-scoped:
 1. DTO in `<module>.dto.ts`.
 2. Service method (rules, transaction, audit) — reuse the repository, add one if the query is new.
 3. Controller method: parse → service → respond.
-4. Route line with `workspaceScope` and, if it changes people, settings or money, a role guard.
+4. Route line with `workspaceScope` and, if it changes people, settings or money, a permission
+   guard. A new verb needs a key in `src/auth/permissions/catalogue.ts` first — the migration step
+   reconciles it onto the built-in roles, and `catalogue.test.ts` is what keeps the built-in roles
+   honest.
 5. Add its entry to `ROUTE_DOCS` in `src/api/openapi.ts`. The path list comes from the router, so
    an undescribed route still appears in `/v1/docs` — as `Undocumented`, which is the reminder.
 6. Schema change? `pnpm db:generate`, then read the SQL before committing it.
@@ -87,5 +93,10 @@ them and neither is workspace-scoped:
 - **Ingestion runs in the worker.** Parsing a PDF and calling an embedding provider takes tens of
   seconds; an HTTP request that does it times out behind the proxy and leaves a half-indexed
   document nobody knows about.
+- **A unit test must not reach the database, even by import.** `src/config/env.ts` validates the
+  whole environment at import time and `db/client.ts` imports it, so a test that pulls in a
+  repository fails in CI with "Invalid environment configuration" while passing locally, where
+  `dotenv` has read `.env`. Put the pure part in its own module — `platform-usage.dto.ts` exists for
+  exactly this. Reproduce CI with `DOTENV_CONFIG_PATH=/nonexistent.env pnpm test`.
 - **Retrieved document text is untrusted.** It is data in a prompt, never instructions. The system
   prompt in `src/modules/chat/prompt.ts` says so; keep it saying so.
