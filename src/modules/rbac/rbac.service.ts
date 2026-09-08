@@ -9,6 +9,7 @@ import type { MembershipRow } from "../workspace/workspace.repository"
 import { workspaceRepository } from "../workspace/workspace.repository"
 import { isBreakGlassAdmin } from "./break-glass"
 import { permissionService } from "./permission.service"
+import { primarySystemRoleId } from "./primary-role"
 import { rbacRepository } from "./rbac.repository"
 import type { CreateRoleInput, CreateWorkspaceRoleInput, UpdateRoleInput } from "./rbac.dto"
 
@@ -293,8 +294,19 @@ export const rbacService = {
 			return role
 		})
 
-		if (resolved.length === 0) {
-			throw new ValidationError("A member must hold at least one role.")
+		// Exactly one built-in role, and it must be the one `member.role` already
+		// names. Better Auth owns that column and resolves its own membership
+		// endpoints through it, so this endpoint manages the *custom* roles beside
+		// it; changing the built-in one goes through the members endpoint, which is
+		// Better Auth's and writes both sides. Letting this write it too would give
+		// the column two writers and no agreement about which won (ADR-053).
+		const expectedSystemRoleId = primarySystemRoleId(membership.role)
+		const systemRoles = resolved.filter((role) => role.isSystem)
+
+		if (systemRoles.length !== 1 || systemRoles[0]?.id !== expectedSystemRoleId) {
+			throw new ValidationError(
+				"The set must contain exactly the member's current built-in role. Change that through the member's role, and use this to add or remove the workspace's own roles.",
+			)
 		}
 
 		await rbacRepository.replaceMemberRoles(memberId, roleIds, actor.id)

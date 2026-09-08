@@ -67,7 +67,7 @@ async function healFromBetterAuthRole(memberId: string): Promise<boolean> {
 	const membership = await rbacRepository.findMemberById(memberId)
 	if (!membership) return false
 
-	await rbacRepository.replaceMemberRoles(memberId, [primarySystemRoleId(membership.role)], null)
+	await rbacRepository.replaceSystemMemberRole(memberId, primarySystemRoleId(membership.role))
 	logger.info("permission.roles_healed", { memberId, role: membership.role })
 	return true
 }
@@ -178,7 +178,7 @@ export const permissionService = {
 	 * privileged role that can still use the product.
 	 */
 	async syncFromBetterAuthRole(memberId: string, roleString: string): Promise<void> {
-		await rbacRepository.replaceMemberRoles(memberId, [primarySystemRoleId(roleString)], null)
+		await rbacRepository.replaceSystemMemberRole(memberId, primarySystemRoleId(roleString))
 		await permissionService.invalidateMember(memberId)
 	},
 
