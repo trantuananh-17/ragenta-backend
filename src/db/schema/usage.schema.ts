@@ -75,6 +75,11 @@ export const usageLedger = pgTable(
 			table.projectId,
 			table.createdAt,
 		),
+		// Every other index here starts with `organization_id`, which is right for
+		// a workspace's own usage screen and useless to the platform aggregate
+		// (ADR-051): that one filters on a date range across every tenant, so
+		// without this it reads the whole table — the fastest-growing one here.
+		index("usageLedger_createdAt_idx").on(table.createdAt),
 		uniqueIndex("usageLedger_reference_uidx").on(table.reference),
 	],
 )

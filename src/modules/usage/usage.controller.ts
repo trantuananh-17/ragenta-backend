@@ -3,6 +3,8 @@ import { z } from "zod"
 import type { AppContext } from "../../api/types"
 import { requireMembership } from "../../api/types"
 import { paginationQuerySchema } from "../../shared/pagination"
+import { platformUsageQuerySchema } from "./platform-usage.dto"
+import { platformUsageService } from "./platform-usage.service"
 import { usageService } from "./usage.service"
 
 const usageQuerySchema = z.object({
@@ -26,5 +28,26 @@ export const usageController = {
 		const membership = requireMembership(c)
 		const { days } = summaryQuerySchema.parse(c.req.query())
 		return c.json(await usageService.summary(membership.organizationId, days))
+	},
+}
+
+/**
+ * The platform view — every workspace at once, which is why these sit behind
+ * `admin.usage.read` and take no membership (ADR-051).
+ */
+export const platformUsageController = {
+	async overview(c: AppContext) {
+		const query = platformUsageQuerySchema.parse(c.req.query())
+		return c.json(await platformUsageService.overview(query))
+	},
+
+	async byModel(c: AppContext) {
+		const query = platformUsageQuerySchema.parse(c.req.query())
+		return c.json(await platformUsageService.byModel(query))
+	},
+
+	async byWorkspace(c: AppContext) {
+		const query = platformUsageQuerySchema.parse(c.req.query())
+		return c.json(await platformUsageService.byWorkspace(query))
 	},
 }

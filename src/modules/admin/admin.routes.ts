@@ -10,6 +10,7 @@ import { promoController } from "../promo/promo.controller"
 import { integrationController } from "../integration/integration.controller"
 import { providerController } from "../provider/provider.controller"
 import { rbacController } from "../rbac/rbac.controller"
+import { platformUsageController } from "../usage/usage.controller"
 import { adminController } from "./admin.controller"
 import { speechAdminController } from "../speech/speech.admin.controller"
 
@@ -249,4 +250,23 @@ adminRoutes.put(
 	"/workspaces/:workspaceId/members/:memberId/roles",
 	requirePlatformPermission("admin.role.manage"),
 	rbacController.setMemberRoles,
+)
+
+// What the platform has spent, and on which model. Cross-tenant by definition,
+// and behind its own permission: `support` reproduces customer problems and does
+// not need the commercial number (ADR-051).
+adminRoutes.get(
+	"/usage",
+	requirePlatformPermission("admin.usage.read"),
+	platformUsageController.overview,
+)
+adminRoutes.get(
+	"/usage/models",
+	requirePlatformPermission("admin.usage.read"),
+	platformUsageController.byModel,
+)
+adminRoutes.get(
+	"/usage/workspaces",
+	requirePlatformPermission("admin.usage.read"),
+	platformUsageController.byWorkspace,
 )

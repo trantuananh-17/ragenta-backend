@@ -52,6 +52,7 @@ import {
 	synthesizeSpeechSchema,
 	transcribeAttachmentSchema,
 } from "../modules/speech/speech.dto"
+import { platformUsageQuerySchema } from "../modules/usage/platform-usage.dto"
 import {
 	createWorkspaceSchema,
 	inviteMemberSchema,
@@ -834,6 +835,24 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		tags: ["Admin"],
 		access: "admin.role.manage",
 		body: setRolesSchema,
+	},
+	"GET /v1/admin/usage": {
+		summary: "Platform spend: totals, by model, by operation, by workspace, by day",
+		tags: ["Admin"],
+		access: "admin.usage.read",
+		query: platformUsageQuerySchema,
+	},
+	"GET /v1/admin/usage/models": {
+		summary: "Platform spend grouped by model",
+		tags: ["Admin"],
+		access: "admin.usage.read",
+		query: platformUsageQuerySchema,
+	},
+	"GET /v1/admin/usage/workspaces": {
+		summary: "Platform spend grouped by workspace",
+		tags: ["Admin"],
+		access: "admin.usage.read",
+		query: platformUsageQuerySchema,
 	},
 
 	"GET /v1/workspaces/:workspaceId/billing/promo-codes": {
