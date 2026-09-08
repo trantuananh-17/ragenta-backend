@@ -38,6 +38,11 @@ export const TOOL_IDS = [
 	"calendar_list_events",
 	"sheets_read",
 	"sheets_append",
+	"slack_post",
+	"slack_history",
+	"github_search_issues",
+	"github_create_issue",
+	"notion_search",
 ] as const
 export type ToolId = (typeof TOOL_IDS)[number]
 
@@ -209,6 +214,39 @@ export const TOOL_CATALOGUE: Record<
 		description:
 			"Add rows after the last one with data. Values are written literally, so a cell starting with = stays text rather than becoming a formula.",
 		writes: true,
+		requires: null,
+	},
+	slack_post: {
+		title: "Post to Slack",
+		description:
+			"Send a message to a channel as the connected Slack account. Needs Slack connected to this workspace.",
+		writes: true,
+		requires: null,
+	},
+	slack_history: {
+		title: "Read a Slack channel",
+		description: "Read recent messages in a channel the connected account can see.",
+		writes: false,
+		requires: null,
+	},
+	github_search_issues: {
+		title: "Search GitHub issues",
+		description:
+			"Search issues and pull requests using GitHub's own syntax, as the connected account.",
+		writes: false,
+		requires: null,
+	},
+	github_create_issue: {
+		title: "Open a GitHub issue",
+		description: "File an issue on a repository the connected account can write to.",
+		writes: true,
+		requires: null,
+	},
+	notion_search: {
+		title: "Search Notion",
+		description:
+			"Find pages and databases by title in the connected Notion workspace. Returns ids and links.",
+		writes: false,
 		requires: null,
 	},
 }

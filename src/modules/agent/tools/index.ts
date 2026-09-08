@@ -3,6 +3,7 @@ import { z } from "zod"
 import type { ToolDefinition } from "../../../ai/clients"
 import type { CitationCollector } from "../citations"
 import { apiCallTool } from "./api-call.tool"
+import { APP_TOOLS } from "./app.tool"
 import { browserReadTool } from "./browser.tool"
 import { excelReadTool, excelWriteTool } from "./excel.tool"
 import { GOOGLE_TOOLS } from "./google.tool"
@@ -74,6 +75,8 @@ export function toolsFor(
 		// by the model — the same rule the knowledge bases follow.
 		const google = GOOGLE_TOOLS.find((tool) => tool.name === id)
 		if (google) tools.push(google)
+		const app = APP_TOOLS.find((tool) => tool.name === id)
+		if (app) tools.push(app)
 	}
 
 	// Closed over the agent and the scope the version was published with, for the
