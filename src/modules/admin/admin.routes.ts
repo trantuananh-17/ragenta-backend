@@ -10,6 +10,7 @@ import { promoController } from "../promo/promo.controller"
 import { integrationController } from "../integration/integration.controller"
 import { providerController } from "../provider/provider.controller"
 import { mcpController } from "../mcp/mcp.controller"
+import { oauthController } from "../oauth/oauth.controller"
 import { rbacController } from "../rbac/rbac.controller"
 import { platformUsageController } from "../usage/usage.controller"
 import { adminController } from "./admin.controller"
@@ -293,4 +294,17 @@ adminRoutes.post(
 	"/mcp-servers/:serverId/check",
 	requirePlatformPermission("admin.mcp.manage"),
 	mcpController.checkPlatform,
+)
+
+// The deployment's own OAuth apps. Ragenta registers them, so the client id and
+// secret are platform configuration rather than anything a workspace supplies.
+adminRoutes.get(
+	"/oauth-providers",
+	requirePlatformPermission("admin.oauth.read"),
+	oauthController.listForAdmin,
+)
+adminRoutes.put(
+	"/oauth-providers/:provider",
+	requirePlatformPermission("admin.oauth.manage"),
+	oauthController.saveClient,
 )

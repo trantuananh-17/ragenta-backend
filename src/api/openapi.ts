@@ -25,6 +25,7 @@ import {
 	updateKnowledgeBaseSchema,
 } from "../modules/knowledge/knowledge.dto"
 import { saveMcpServerSchema } from "../modules/mcp/mcp.dto"
+import { saveOAuthClientSchema, startOAuthSchema } from "../modules/oauth/oauth.dto"
 import { updateModelSettingsSchema } from "../modules/model/model.dto"
 import {
 	patchModelSchema,
@@ -966,6 +967,44 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		tags: ["Agents"],
 		access: "the webhook's own secret",
 		status: 202,
+	},
+	"GET /v1/workspaces/:workspaceId/oauth-providers": {
+		summary: "Which outside accounts can be connected on this deployment",
+		tags: ["Agents"],
+		access: "oauthConnection.read",
+	},
+	"GET /v1/workspaces/:workspaceId/oauth-connections": {
+		summary: "Accounts this workspace has connected",
+		tags: ["Agents"],
+		access: "oauthConnection.read",
+	},
+	"POST /v1/workspaces/:workspaceId/oauth-connections/:provider/start": {
+		summary: "Begin connecting an account. Returns the URL to send the browser to",
+		tags: ["Agents"],
+		access: "oauthConnection.manage",
+		body: startOAuthSchema,
+	},
+	"DELETE /v1/workspaces/:workspaceId/oauth-connections/:connectionId": {
+		summary: "Disconnect an account",
+		tags: ["Agents"],
+		access: "oauthConnection.manage",
+		status: 204,
+	},
+	"GET /v1/oauth/:provider/callback": {
+		summary: "Where the provider sends the browser back. Redirects to the app",
+		tags: ["Agents"],
+		access: "the session that started the authorization",
+	},
+	"GET /v1/admin/oauth-providers": {
+		summary: "The deployment's registered OAuth apps, with each redirect URI",
+		tags: ["Admin"],
+		access: "admin.oauth.read",
+	},
+	"PUT /v1/admin/oauth-providers/:provider": {
+		summary: "Register an OAuth app's client id and secret",
+		tags: ["Admin"],
+		access: "admin.oauth.manage",
+		body: saveOAuthClientSchema,
 	},
 	"PUT /v1/workspaces/:workspaceId/mcp-servers": {
 		summary: "Add or change an MCP server this workspace owns",

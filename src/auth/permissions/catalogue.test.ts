@@ -177,6 +177,11 @@ const LEGACY_ROUTE_GATES: ReadonlyArray<readonly [PermissionKey, readonly Worksp
 	["connection.manage", ["owner", "admin"]],
 	// New in phase 8, and given the same audience as a connection for the same
 	// reason: both hold a credential an agent acts through.
+	["oauthConnection.read", ["owner", "admin", "member", "viewer"]],
+	// Connecting an account means an agent will act *as somebody*, which is a
+	// heavier decision than storing a service key — but the audience is the same
+	// one that manages every other credential in a workspace.
+	["oauthConnection.manage", ["owner", "admin"]],
 	["mcpServer.read", ["owner", "admin", "member", "viewer"]],
 	["mcpServer.manage", ["owner", "admin"]],
 

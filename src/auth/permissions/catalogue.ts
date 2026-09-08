@@ -400,6 +400,21 @@ const WORKSPACE_PERMISSIONS = [
 	},
 
 	{
+		key: "oauthConnection.read",
+		scope: "workspace",
+		resource: "oauthConnection",
+		action: "read",
+		description: "See which outside accounts this workspace has connected",
+	},
+	{
+		key: "oauthConnection.manage",
+		scope: "workspace",
+		resource: "oauthConnection",
+		action: "manage",
+		description: "Connect an account an agent will act as, and disconnect one",
+	},
+
+	{
 		key: "mcpServer.read",
 		scope: "workspace",
 		resource: "mcpServer",
@@ -630,6 +645,21 @@ const PLATFORM_PERMISSIONS = [
 	},
 
 	{
+		key: "admin.oauth.read",
+		scope: "platform",
+		resource: "admin.oauth",
+		action: "read",
+		description: "See which OAuth apps this deployment has registered",
+	},
+	{
+		key: "admin.oauth.manage",
+		scope: "platform",
+		resource: "admin.oauth",
+		action: "manage",
+		description: "Register an OAuth app's client id and secret",
+	},
+
+	{
 		key: "admin.mcp.read",
 		scope: "platform",
 		resource: "admin.mcp",
@@ -839,6 +869,7 @@ const PLATFORM_SYSTEM_ROLES = [
 			"admin.speech.read",
 			"admin.integration.read",
 			"admin.mcp.read",
+			"admin.oauth.read",
 			"admin.role.read",
 			"admin.audit.read",
 			"admin.setting.read",
@@ -877,6 +908,7 @@ const PLATFORM_SYSTEM_ROLES = [
 			"admin.speech.read",
 			"admin.integration.read",
 			"admin.mcp.read",
+			"admin.oauth.read",
 			"admin.role.read",
 			"admin.audit.read",
 			"admin.setting.read",

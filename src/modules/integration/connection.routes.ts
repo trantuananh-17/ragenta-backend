@@ -4,6 +4,7 @@ import { requireAuth } from "../../api/middleware/session"
 import { requirePermission } from "../../api/middleware/require-permission"
 import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
+import { oauthController } from "../oauth/oauth.controller"
 import { connectionController } from "./integration.controller"
 
 /**
@@ -44,4 +45,36 @@ connectionRoutes.post(
 	workspaceScope,
 	requirePermission("connection.manage"),
 	connectionController.check,
+)
+
+/**
+ * Accounts somebody connected, which an agent then acts as.
+ *
+ * Beside the connections they sit next to on screen, and gated the same way: a
+ * read is any member, and connecting one is the audience that manages every
+ * other credential here (ADR-059).
+ */
+connectionRoutes.get(
+	"/:workspaceId/oauth-providers",
+	workspaceScope,
+	requirePermission("oauthConnection.read"),
+	oauthController.listProviders,
+)
+connectionRoutes.get(
+	"/:workspaceId/oauth-connections",
+	workspaceScope,
+	requirePermission("oauthConnection.read"),
+	oauthController.list,
+)
+connectionRoutes.post(
+	"/:workspaceId/oauth-connections/:provider/start",
+	workspaceScope,
+	requirePermission("oauthConnection.manage"),
+	oauthController.start,
+)
+connectionRoutes.delete(
+	"/:workspaceId/oauth-connections/:connectionId",
+	workspaceScope,
+	requirePermission("oauthConnection.manage"),
+	oauthController.disconnect,
 )
