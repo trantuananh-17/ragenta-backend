@@ -251,6 +251,40 @@ export const rbacRepository = {
 	},
 
 	/**
+	 * Swaps the membership's **built-in** role, leaving any custom ones in place.
+	 *
+	 * Better Auth writes `member.role` and our hook mirrors it here. Replacing the
+	 * whole set would mean that changing somebody from `member` to `admin` on the
+	 * members screen silently deleted every custom role they held — a data loss
+	 * with no message and no way to notice until somebody could not do their job.
+	 *
+	 * A membership therefore holds exactly one system role plus any number of
+	 * custom ones, which is also what makes the members screen's two controls —
+	 * a single-choice built-in role and a multi-choice list of the workspace's own
+	 * — mean what they appear to mean (ADR-053).
+	 */
+	async replaceSystemMemberRole(
+		memberId: string,
+		roleId: string,
+		executor: DbExecutor = db,
+	): Promise<void> {
+		await executor.transaction(async (tx) => {
+			await tx
+				.delete(memberRole)
+				.where(
+					and(
+						eq(memberRole.memberId, memberId),
+						inArray(
+							memberRole.roleId,
+							tx.select({ id: role.id }).from(role).where(eq(role.isSystem, true)),
+						),
+					),
+				)
+			await tx.insert(memberRole).values({ memberId, roleId }).onConflictDoNothing()
+		})
+	},
+
+	/**
 	 * Replaces a membership's roles with exactly this set, in one transaction.
 	 *
 	 * Delete-then-insert rather than a diff: the set is four rows at most, and a

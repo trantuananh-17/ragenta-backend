@@ -4,6 +4,7 @@ import { requireAuth } from "../../api/middleware/session"
 import { requirePermission } from "../../api/middleware/require-permission"
 import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
+import { rbacController } from "../rbac/rbac.controller"
 import { workspaceController } from "./workspace.controller"
 
 /**
@@ -65,4 +66,44 @@ workspaceRoutes.delete(
 	workspaceScope,
 	requirePermission("invitation.revoke"),
 	workspaceController.cancelInvitation,
+)
+
+/**
+ * A workspace composing its own roles, without going through the admin console.
+ *
+ * Reading is open to any member: the members screen has to name the role each
+ * person holds, and a seat that cannot read the list cannot render it. Writing
+ * needs `role.manage`, and nobody can compose a role granting more than they
+ * themselves hold (ADR-052).
+ */
+workspaceRoutes.get("/:workspaceId/roles", workspaceScope, rbacController.listWorkspaceRoles)
+workspaceRoutes.post(
+	"/:workspaceId/roles",
+	workspaceScope,
+	requirePermission("role.manage"),
+	rbacController.createWorkspaceRole,
+)
+workspaceRoutes.patch(
+	"/:workspaceId/roles/:roleId",
+	workspaceScope,
+	requirePermission("role.manage"),
+	rbacController.updateWorkspaceRole,
+)
+workspaceRoutes.delete(
+	"/:workspaceId/roles/:roleId",
+	workspaceScope,
+	requirePermission("role.manage"),
+	rbacController.deleteWorkspaceRole,
+)
+
+workspaceRoutes.get(
+	"/:workspaceId/members/:memberId/roles",
+	workspaceScope,
+	rbacController.listWorkspaceMemberRoles,
+)
+workspaceRoutes.put(
+	"/:workspaceId/members/:memberId/roles",
+	workspaceScope,
+	requirePermission("member.update"),
+	rbacController.setWorkspaceMemberRoles,
 )

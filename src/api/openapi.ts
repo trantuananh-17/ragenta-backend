@@ -44,6 +44,7 @@ import {
 } from "../modules/project/project.dto"
 import {
 	createRoleSchema,
+	createWorkspaceRoleSchema,
 	listRolesQuerySchema,
 	setRolesSchema,
 	updateRoleSchema,
@@ -116,6 +117,41 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary: "What the caller may do in this workspace",
 		tags: ["Workspaces"],
 		access: "any member",
+	},
+	"GET /v1/workspaces/:workspaceId/roles": {
+		summary: "Roles this workspace can assign",
+		tags: ["Workspaces"],
+		access: "any member",
+	},
+	"POST /v1/workspaces/:workspaceId/roles": {
+		summary: "Create a role this workspace owns",
+		tags: ["Workspaces"],
+		access: "role.manage",
+		body: createWorkspaceRoleSchema,
+		status: 201,
+	},
+	"PATCH /v1/workspaces/:workspaceId/roles/:roleId": {
+		summary: "Change a role this workspace owns",
+		tags: ["Workspaces"],
+		access: "role.manage",
+		body: updateRoleSchema,
+	},
+	"DELETE /v1/workspaces/:workspaceId/roles/:roleId": {
+		summary: "Delete a role this workspace owns and nobody holds",
+		tags: ["Workspaces"],
+		access: "role.manage",
+		status: 204,
+	},
+	"GET /v1/workspaces/:workspaceId/members/:memberId/roles": {
+		summary: "The roles a member holds",
+		tags: ["Workspaces"],
+		access: "any member",
+	},
+	"PUT /v1/workspaces/:workspaceId/members/:memberId/roles": {
+		summary: "Set the roles a member holds",
+		tags: ["Workspaces"],
+		access: "member.update",
+		body: setRolesSchema,
 	},
 	"GET /v1/workspaces/:workspaceId/members": {
 		summary: "List members",

@@ -5,11 +5,13 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from ".
 import { newId } from "../../shared/id"
 import { logger } from "../../shared/logger"
 import { auditService } from "../audit/audit.service"
+import type { MembershipRow } from "../workspace/workspace.repository"
 import { workspaceRepository } from "../workspace/workspace.repository"
 import { isBreakGlassAdmin } from "./break-glass"
 import { permissionService } from "./permission.service"
+import { primarySystemRoleId } from "./primary-role"
 import { rbacRepository } from "./rbac.repository"
-import type { CreateRoleInput, UpdateRoleInput } from "./rbac.dto"
+import type { CreateRoleInput, CreateWorkspaceRoleInput, UpdateRoleInput } from "./rbac.dto"
 
 const log = logger.child({ module: "rbac" })
 
@@ -292,8 +294,19 @@ export const rbacService = {
 			return role
 		})
 
-		if (resolved.length === 0) {
-			throw new ValidationError("A member must hold at least one role.")
+		// Exactly one built-in role, and it must be the one `member.role` already
+		// names. Better Auth owns that column and resolves its own membership
+		// endpoints through it, so this endpoint manages the *custom* roles beside
+		// it; changing the built-in one goes through the members endpoint, which is
+		// Better Auth's and writes both sides. Letting this write it too would give
+		// the column two writers and no agreement about which won (ADR-053).
+		const expectedSystemRoleId = primarySystemRoleId(membership.role)
+		const systemRoles = resolved.filter((role) => role.isSystem)
+
+		if (systemRoles.length !== 1 || systemRoles[0]?.id !== expectedSystemRoleId) {
+			throw new ValidationError(
+				"The set must contain exactly the member's current built-in role. Change that through the member's role, and use this to add or remove the workspace's own roles.",
+			)
 		}
 
 		await rbacRepository.replaceMemberRoles(memberId, roleIds, actor.id)
@@ -310,4 +323,175 @@ export const rbacService = {
 
 		return rbacRepository.listMemberRoles(memberId)
 	},
+
+	/**
+	 * The roles a workspace may assign: the built-in four plus its own.
+	 *
+	 * A role belonging to another workspace is never selected — the filter is in
+	 * the statement, not applied afterwards (`.claude/rules/security.md`).
+	 */
+	async listWorkspaceRoles(workspaceId: string) {
+		const roles = await rbacRepository.listRoles(workspaceId)
+		const workspaceScoped = roles.filter((role) => role.scope === "workspace")
+
+		return Promise.all(
+			workspaceScoped.map(async (role) => ({
+				...role,
+				permissions: await rbacRepository.listRolePermissionKeys(role.id),
+			})),
+		)
+	},
+
+	/**
+	 * A role a workspace owns.
+	 *
+	 * The escalation guard is different from the platform one: the actor is a
+	 * member, not a console administrator, so the permission they must already
+	 * hold is the *workspace* one. Without this an `admin` could compose a role
+	 * carrying `workspace.delete` and hand it to themselves, which is the
+	 * workspace-level version of the hole ADR-050 closes for the console.
+	 */
+	async createWorkspaceRole(
+		workspaceId: string,
+		membership: MembershipRow,
+		input: CreateWorkspaceRoleInput,
+		actor: AuthUser,
+	) {
+		await assertMemberMayGrant(membership, input.permissions)
+
+		const existing = await rbacRepository.listRoles(workspaceId)
+		if (existing.some((role) => role.key === input.key && role.scope === "workspace")) {
+			throw new ConflictError("A role with that key already exists in this workspace.")
+		}
+
+		const id = newId()
+		await rbacRepository.createRole(
+			{
+				id,
+				organizationId: workspaceId,
+				scope: "workspace",
+				key: input.key,
+				name: input.name,
+				description: input.description,
+				isSystem: false,
+				createdBy: actor.id,
+			},
+			input.permissions,
+		)
+
+		await auditService.record({
+			action: "rbac.workspace_role.created",
+			actorId: actor.id,
+			organizationId: workspaceId,
+			targetType: "role",
+			targetId: id,
+			metadata: { key: input.key, permissions: input.permissions },
+		})
+
+		return rbacService.getRole(id)
+	},
+
+	async updateWorkspaceRole(
+		workspaceId: string,
+		membership: MembershipRow,
+		roleId: string,
+		input: UpdateRoleInput,
+		actor: AuthUser,
+	) {
+		const role = await requireWorkspaceOwnedRole(workspaceId, roleId)
+
+		if (input.permissions) {
+			await assertPermissionsMatchScope("workspace", input.permissions)
+			await assertMemberMayGrant(membership, input.permissions)
+		}
+
+		await rbacRepository.updateRole(
+			roleId,
+			{
+				...(input.name === undefined ? {} : { name: input.name }),
+				...(input.description === undefined ? {} : { description: input.description }),
+			},
+			input.permissions,
+		)
+
+		if (input.permissions) await permissionService.invalidateAll()
+
+		await auditService.record({
+			action: "rbac.workspace_role.updated",
+			actorId: actor.id,
+			organizationId: workspaceId,
+			targetType: "role",
+			targetId: roleId,
+			metadata: { permissions: input.permissions ?? null },
+		})
+
+		return rbacService.getRole(roleId)
+	},
+
+	async deleteWorkspaceRole(workspaceId: string, roleId: string, actor: AuthUser) {
+		const role = await requireWorkspaceOwnedRole(workspaceId, roleId)
+
+		const holders = await rbacRepository.countRoleHolders(roleId)
+		if (holders > 0) {
+			throw new ConflictError(
+				`${holders} ${holders === 1 ? "person holds" : "people hold"} this role. Reassign them first.`,
+			)
+		}
+
+		await rbacRepository.deleteRole(roleId)
+		await permissionService.invalidateAll()
+
+		await auditService.record({
+			action: "rbac.workspace_role.deleted",
+			actorId: actor.id,
+			organizationId: workspaceId,
+			targetType: "role",
+			targetId: roleId,
+			metadata: { key: role.key },
+		})
+	},
+}
+
+/**
+ * A member cannot compose a role granting more than they themselves hold.
+ *
+ * The workspace-level twin of `assertMayGrant`. Without it an `admin` — who may
+ * manage roles — could write one carrying `workspace.delete`, assign it to
+ * themselves, and the distinction between `admin` and `owner` would be a
+ * formality.
+ */
+async function assertMemberMayGrant(
+	membership: MembershipRow,
+	keys: readonly string[],
+): Promise<void> {
+	const held = await permissionService.forMember(membership.id)
+	const missing = keys.filter((key) => !held.has(key))
+
+	if (missing.length > 0) {
+		throw new ForbiddenError(
+			`You cannot grant a permission you do not hold: ${missing.join(", ")}.`,
+		)
+	}
+}
+
+/**
+ * A role this workspace owns and may therefore edit.
+ *
+ * A built-in role is refused rather than edited: it is shared by every workspace
+ * on the deployment, and the seeder resets it on every deploy anyway. A role
+ * owned by another workspace answers 404, not 403 — the other answer confirms it
+ * exists.
+ */
+async function requireWorkspaceOwnedRole(workspaceId: string, roleId: string) {
+	const role = await rbacRepository.findRoleById(roleId)
+	if (!role || role.scope !== "workspace") throw new NotFoundError("Role")
+	if (role.organizationId !== workspaceId) {
+		if (role.organizationId === null) {
+			throw new ForbiddenError(
+				"This is a built-in role, shared by every workspace. Create your own role instead.",
+			)
+		}
+		throw new NotFoundError("Role")
+	}
+	return role
 }
