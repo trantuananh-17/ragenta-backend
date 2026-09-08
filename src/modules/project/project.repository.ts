@@ -1,4 +1,5 @@
 import { and, desc, eq, isNull } from "drizzle-orm"
+import type { SQL } from "drizzle-orm"
 
 import { db } from "../../db/client"
 import type { DbExecutor } from "../../db/client"
@@ -13,9 +14,20 @@ export type NewProject = typeof project.$inferInsert
  * id from another tenant through.
  */
 export const projectRepository = {
-	async list(workspaceId: string, includeArchived: boolean, executor: DbExecutor = db) {
+	/**
+	 * `visible` narrows the list to what the caller may actually open (ADR-054).
+	 * It goes in the WHERE rather than being applied to the result, so the rows
+	 * that come back are the rows that exist as far as this caller is concerned.
+	 */
+	async list(
+		workspaceId: string,
+		includeArchived: boolean,
+		visible: SQL | undefined,
+		executor: DbExecutor = db,
+	) {
 		const conditions = [eq(project.organizationId, workspaceId)]
 		if (!includeArchived) conditions.push(isNull(project.archivedAt))
+		if (visible) conditions.push(visible)
 
 		return executor
 			.select()

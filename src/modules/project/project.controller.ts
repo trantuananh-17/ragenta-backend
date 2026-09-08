@@ -12,7 +12,7 @@ export const projectController = {
 		const membership = requireMembership(c)
 		const { includeArchived } = listProjectsQuerySchema.parse(c.req.query())
 		return c.json({
-			projects: await projectService.list(membership.organizationId, includeArchived),
+			projects: await projectService.list(membership, includeArchived),
 		})
 	},
 

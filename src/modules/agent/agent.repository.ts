@@ -1,4 +1,5 @@
 import { and, count, desc, eq, sql } from "drizzle-orm"
+import type { SQL } from "drizzle-orm"
 
 import { db } from "../../db/client"
 import type { DbExecutor } from "../../db/client"
@@ -11,19 +12,26 @@ export type AgentRunRow = typeof agentRun.$inferSelect
 export type AgentRunStepRow = typeof agentRunStep.$inferSelect
 
 export const agentRepository = {
-	async list(workspaceId: string, query: PaginationQuery, executor: DbExecutor = db) {
+	/** `visible` narrows the page and the count together (ADR-054). */
+	async list(
+		workspaceId: string,
+		query: PaginationQuery,
+		visible: SQL | undefined,
+		executor: DbExecutor = db,
+	) {
+		const where = visible
+			? and(eq(agent.organizationId, workspaceId), visible)
+			: eq(agent.organizationId, workspaceId)
+
 		const items = await executor
 			.select()
 			.from(agent)
-			.where(eq(agent.organizationId, workspaceId))
+			.where(where)
 			.orderBy(desc(agent.updatedAt))
 			.limit(query.limit)
 			.offset(query.offset)
 
-		const [totals] = await executor
-			.select({ value: count() })
-			.from(agent)
-			.where(eq(agent.organizationId, workspaceId))
+		const [totals] = await executor.select({ value: count() }).from(agent).where(where)
 
 		return { items, total: totals?.value ?? 0 }
 	},

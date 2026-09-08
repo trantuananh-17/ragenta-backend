@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer"
+import { knowledgeBase } from "../../db/schema"
 
 import { resolveEmbeddingModel } from "../../ai/embed"
 import { resolveRerankModel } from "../../ai/rerank"
@@ -20,6 +21,8 @@ import { VectorStoreUnavailableError } from "../../vector/qdrant"
 import { enqueueDocumentIngestion } from "../../jobs/ingestion.jobs"
 import { auditService } from "../audit/audit.service"
 import { modelService } from "../model/model.service"
+import { visibilityFor } from "../rbac/visibility"
+import type { MembershipRow } from "../workspace/workspace.repository"
 import { ingestionService } from "./ingestion.service"
 import { knowledgeRepository } from "./knowledge.repository"
 import { resolveFormat } from "./extractor"
@@ -70,8 +73,14 @@ function assertInfrastructure(): void {
 }
 
 export const knowledgeService = {
-	async listBases(workspaceId: string, query: PaginationQuery) {
-		const { items, total } = await knowledgeRepository.listBases(workspaceId, query)
+	/** Narrowed to the bases this caller may read, page and total together (ADR-054). */
+	async listBases(membership: MembershipRow, query: PaginationQuery) {
+		const visible = await visibilityFor(membership, "knowledgeBase", "knowledgeBase.read")
+		const { items, total } = await knowledgeRepository.listBases(
+			membership.organizationId,
+			query,
+			visible.unrestricted ? undefined : visible.condition(knowledgeBase.id),
+		)
 		return page(items, total, query)
 	},
 

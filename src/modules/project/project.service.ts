@@ -24,9 +24,23 @@ async function availableSlug(workspaceId: string, preferred: string) {
 	throw new ConflictError("Could not derive a free project slug. Provide one explicitly.")
 }
 
+import { visibilityFor } from "../rbac/visibility"
+import type { MembershipRow } from "../workspace/workspace.repository"
+import { project } from "../../db/schema"
+
 export const projectService = {
-	async list(workspaceId: string, includeArchived: boolean) {
-		return projectRepository.list(workspaceId, includeArchived)
+	/**
+	 * Takes the membership rather than the workspace id because the list is
+	 * narrowed to what this caller may open (ADR-054). A denied project is not
+	 * merely unopenable — it is not named.
+	 */
+	async list(membership: MembershipRow, includeArchived: boolean) {
+		const visible = await visibilityFor(membership, "project", "project.read")
+		return projectRepository.list(
+			membership.organizationId,
+			includeArchived,
+			visible.unrestricted ? undefined : visible.condition(project.id),
+		)
 	},
 
 	async get(workspaceId: string, projectId: string) {

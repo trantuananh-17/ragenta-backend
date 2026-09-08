@@ -23,7 +23,7 @@ export const agentController = {
 	async list(c: AppContext) {
 		const membership = requireMembership(c)
 		const query = paginationQuerySchema.parse(c.req.query())
-		return c.json(await agentService.list(membership.organizationId, query))
+		return c.json(await agentService.list(membership, query))
 	},
 
 	async create(c: AppContext) {
