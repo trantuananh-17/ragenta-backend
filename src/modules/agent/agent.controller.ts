@@ -7,6 +7,7 @@ import { paginationQuerySchema } from "../../shared/pagination"
 import {
 	agentConfigSchema,
 	createAgentSchema,
+	createFromTemplateSchema,
 	resumeRunSchema,
 	runAgentSchema,
 	updateAgentSchema,
@@ -230,5 +231,22 @@ export const agentController = {
 				})
 			}
 		})
+	},
+
+	async listTemplates(c: AppContext) {
+		const membership = requireMembership(c)
+		return c.json({ templates: await agentService.listTemplates(membership.organizationId) })
+	},
+
+	async createFromTemplate(c: AppContext) {
+		const user = requireUser(c)
+		const membership = requireMembership(c)
+		const input = createFromTemplateSchema.parse(await c.req.json())
+		const result = await agentService.createFromTemplate(
+			membership.organizationId,
+			input,
+			user.id,
+		)
+		return c.json(result, 201)
 	},
 }
