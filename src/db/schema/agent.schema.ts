@@ -159,11 +159,35 @@ export const agentVersion = pgTable(
 		 */
 		graph: jsonb("graph").$type<Record<string, unknown>>(),
 
+		/**
+		 * Whether this version remembers anything between runs, and about whom.
+		 *
+		 * Off by default. Memory changes what an agent says without anybody editing
+		 * its brief, which is the right behaviour when it was asked for and a
+		 * baffling one when it was not — so it is opted into per version, and a
+		 * version published without it behaves exactly as every version before
+		 * memory existed did (ADR-055).
+		 *
+		 * `agent` scope remembers facts about the work; `user` scope keeps each
+		 * person's memories to themselves. There is no scope that shares one
+		 * person's memories with another, because that is the mistake this column
+		 * exists to make impossible rather than merely unlikely.
+		 */
+		memoryEnabled: boolean("memory_enabled").default(false).notNull(),
+		/** agent | user */
+		memoryScope: text("memory_scope").default("agent").notNull(),
+		/** How many memories a run may recall. Bounded so recall cannot eat the prompt. */
+		memoryTopK: integer("memory_top_k").default(5).notNull(),
+
 		createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
 		createdAt: timestamp("created_at").defaultNow().notNull(),
 	},
 	(table) => [
 		uniqueIndex("agentVersion_agentId_version_uidx").on(table.agentId, table.version),
+		check(
+			"agentVersion_memoryScope_check",
+			sql`${table.memoryScope} in ('agent', 'user')`,
+		),
 		check(
 			"agentVersion_searchMode_check",
 			sql`${table.searchMode} in ('hybrid', 'vector', 'keyword')`,

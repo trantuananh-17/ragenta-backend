@@ -61,6 +61,23 @@ export const agentConfigSchema = z.object({
 	 * mid-run is a failed run and a charged model call.
 	 */
 	graph: agentGraphSchema.nullable().default(null),
+	/**
+	 * Whether this version remembers anything between runs, and about whom.
+	 *
+	 * Off by default. Memory changes what an agent says without anybody editing
+	 * its brief — right when it was asked for, baffling when it was not — so it
+	 * is opted into per version and a version published without it behaves
+	 * exactly as every version before memory existed did (ADR-055).
+	 */
+	memoryEnabled: z.boolean().default(false),
+	/**
+	 * `agent` remembers facts about the work, shared by everybody who runs it.
+	 * `user` keeps each person's memories to themselves. There is deliberately no
+	 * value that shares one person's memories with another.
+	 */
+	memoryScope: z.enum(["agent", "user"]).default("agent"),
+	/** How many memories one run may recall. Bounded so recall cannot eat the prompt. */
+	memoryTopK: z.number().int().min(1).max(20).default(5),
 })
 
 export const createAgentSchema = z.object({

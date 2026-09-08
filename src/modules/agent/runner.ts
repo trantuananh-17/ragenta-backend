@@ -33,7 +33,9 @@ import { agentGraphSchema } from "./graph/types"
 import { runGraph } from "./graph/engine"
 import type { NodeContext } from "./graph/nodes"
 import { runApprovedTool, runToolLoop } from "./loop"
+import { memoryService } from "../memory/memory.service"
 import { toolWrites, toolsFor } from "./tools"
+import { renderMemories } from "./tools/memory-content"
 import { clearStop, isStopRequested } from "./stop-signal"
 
 const log = logger.child({ module: "agent.runner" })
@@ -868,7 +870,18 @@ export const agentRunner = {
 			? await this.openingMessages(prepared, version.instructions)
 			: context.messages
 
-		const tools = toolsFor(version.tools, version.knowledgeBaseIds, hooks.citations)
+		const tools = toolsFor(
+			version.tools,
+			version.knowledgeBaseIds,
+			hooks.citations,
+			version.memoryEnabled
+				? {
+						agentId: prepared.agent.id,
+						scope: version.memoryScope === "user" ? "user" : "agent",
+						topK: version.memoryTopK,
+					}
+				: undefined,
+		)
 
 		/**
 		 * Resuming an approved write: the call has to happen *before* the loop is
@@ -1097,8 +1110,38 @@ ${event.call.arguments.slice(0, 800)}`,
 			maxOutputTokens: prepared.version.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
 			grounding: "tools",
 			instructions,
+			memories: await this.recallMemories(prepared),
 		})
 		return this.attachImages(messages, prepared.attachments)
+	},
+
+	/**
+	 * What this agent remembers that bears on the run's own input, fetched once
+	 * before the first model call.
+	 *
+	 * Recall happens here rather than being left to `memory_search` because a
+	 * model only calls a tool it thinks of: an agent that has been told something
+	 * important should not have to guess that it was told. The tool remains, for
+	 * the older or more specific thing this pass would not surface.
+	 *
+	 * Returns an empty string on any failure — memory is an enhancement, and a run
+	 * that cannot recall should answer without it rather than not answer.
+	 */
+	async recallMemories(prepared: PreparedRun): Promise<string> {
+		const { version } = prepared
+		if (!version.memoryEnabled) return ""
+
+		const memories = await memoryService.recall(
+			{
+				workspaceId: prepared.agent.organizationId,
+				agentId: prepared.agent.id,
+				userId: version.memoryScope === "user" ? prepared.actorId : null,
+			},
+			prepared.input.input,
+			version.memoryTopK,
+		)
+
+		return renderMemories(memories)
 	},
 
 	/**
@@ -1171,6 +1214,9 @@ ${event.call.arguments.slice(0, 800)}`,
 			maxOutputTokens: version.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
 			grounding,
 			instructions: version.instructions,
+			// Both paths recall, or an agent would remember only when it happened to
+			// have been given the search tool.
+			memories: await this.recallMemories(prepared),
 		})
 
 		citations.add(used)
