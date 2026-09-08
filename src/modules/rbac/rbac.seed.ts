@@ -1,15 +1,11 @@
 import { and, eq, isNull, notInArray, sql } from "drizzle-orm"
 
-import {
-	PERMISSIONS,
-	SYSTEM_ROLES,
-	WORKSPACE_SYSTEM_ROLE_KEYS,
-	systemRoleId,
-} from "../../auth/permissions"
+import { PERMISSIONS, SYSTEM_ROLES, systemRoleId } from "../../auth/permissions"
 import type { DbExecutor } from "../../db/client"
 import { db } from "../../db/client"
 import { member, memberRole, permission, role, rolePermission } from "../../db/schema"
 import { logger } from "../../shared/logger"
+import { primarySystemRoleId } from "./primary-role"
 
 /**
  * Reconciles the database with the permission catalogue in code.
@@ -140,11 +136,10 @@ async function backfillMemberRoles(tx: DbExecutor): Promise<void> {
 
 	if (withoutRoles.length === 0) return
 
-	const rows = withoutRoles.map((row) => {
-		const primary = row.role.split(",")[0]?.trim() ?? ""
-		const key = (WORKSPACE_SYSTEM_ROLE_KEYS as string[]).includes(primary) ? primary : "member"
-		return { memberId: row.id, roleId: systemRoleId("workspace", key) }
-	})
+	const rows = withoutRoles.map((row) => ({
+		memberId: row.id,
+		roleId: primarySystemRoleId(row.role),
+	}))
 
 	await tx.insert(memberRole).values(rows).onConflictDoNothing()
 

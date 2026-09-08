@@ -177,6 +177,7 @@ const LEGACY_ROUTE_GATES: ReadonlyArray<readonly [PermissionKey, readonly Worksp
 	["connection.manage", ["owner", "admin"]],
 
 	["billing.read", ["owner", "admin", "member", "viewer"]],
+	["transaction.read", ["owner", "admin"]],
 	["billing.manage", ["owner", "admin"]],
 	["usage.read", ["owner", "admin", "member", "viewer"]],
 	["promo.read", ["owner", "admin", "member", "viewer"]],

@@ -1,8 +1,7 @@
 import { createMiddleware } from "hono/factory"
 
-import type { WorkspaceRole } from "../../auth/permissions"
 import { workspaceRepository } from "../../modules/workspace/workspace.repository"
-import { ForbiddenError, NotFoundError } from "../../shared/errors"
+import { NotFoundError } from "../../shared/errors"
 import type { AppEnv } from "../types"
 import { requireUser } from "../types"
 
@@ -26,17 +25,3 @@ export const workspaceScope = createMiddleware<AppEnv>(async (c, next) => {
 	c.set("logger", c.get("logger").child({ workspaceId }))
 	await next()
 })
-
-/** Narrows a workspace-scoped route to specific roles. Runs after `workspaceScope`. */
-export function requireWorkspaceRole(...allowed: WorkspaceRole[]) {
-	return createMiddleware<AppEnv>(async (c, next) => {
-		const membership = c.get("membership")
-		if (!membership) throw new ForbiddenError()
-		if (!(allowed as string[]).includes(membership.role)) {
-			throw new ForbiddenError(
-				`This action requires one of these workspace roles: ${allowed.join(", ")}.`,
-			)
-		}
-		await next()
-	})
-}

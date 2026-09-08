@@ -2,7 +2,8 @@ import { Hono } from "hono"
 
 import { rateLimit } from "../../api/middleware/rate-limit"
 import { requireAuth } from "../../api/middleware/session"
-import { requireWorkspaceRole, workspaceScope } from "../../api/middleware/workspace-scope"
+import { requirePermission } from "../../api/middleware/require-permission"
+import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
 import { agentController } from "./agent.controller"
 
@@ -18,7 +19,6 @@ export const agentRoutes = new Hono<AppEnv>()
 
 agentRoutes.use("*", requireAuth)
 
-const contributor = requireWorkspaceRole("owner", "admin", "member")
 
 /**
  * Starting a run, resuming one and retrying one all put the same loop back on a
@@ -35,18 +35,23 @@ const starting = rateLimit({
 
 agentRoutes.get("/:workspaceId/agent-tools", workspaceScope, agentController.listTools)
 agentRoutes.get("/:workspaceId/agents", workspaceScope, agentController.list)
-agentRoutes.post("/:workspaceId/agents", workspaceScope, contributor, agentController.create)
+agentRoutes.post(
+	"/:workspaceId/agents",
+	workspaceScope,
+	requirePermission("agent.create"),
+	agentController.create,
+)
 agentRoutes.get("/:workspaceId/agents/:agentId", workspaceScope, agentController.get)
 agentRoutes.patch(
 	"/:workspaceId/agents/:agentId",
 	workspaceScope,
-	contributor,
+	requirePermission("agent.update"),
 	agentController.update,
 )
 agentRoutes.delete(
 	"/:workspaceId/agents/:agentId",
 	workspaceScope,
-	contributor,
+	requirePermission("agent.delete"),
 	agentController.remove,
 )
 agentRoutes.get(
@@ -57,21 +62,21 @@ agentRoutes.get(
 agentRoutes.post(
 	"/:workspaceId/agents/:agentId/versions",
 	workspaceScope,
-	contributor,
+	requirePermission("agent.publish"),
 	agentController.publishVersion,
 )
 agentRoutes.get("/:workspaceId/agents/:agentId/runs", workspaceScope, agentController.listRuns)
 agentRoutes.post(
 	"/:workspaceId/agents/:agentId/runs",
 	workspaceScope,
-	contributor,
+	requirePermission("agent.run"),
 	starting,
 	agentController.run,
 )
 agentRoutes.post(
 	"/:workspaceId/agents/:agentId/runs/queue",
 	workspaceScope,
-	contributor,
+	requirePermission("agent.run"),
 	starting,
 	agentController.queueRun,
 )
@@ -80,20 +85,20 @@ agentRoutes.get("/:workspaceId/agent-runs/:runId/steps", workspaceScope, agentCo
 agentRoutes.post(
 	"/:workspaceId/agent-runs/:runId/resume",
 	workspaceScope,
-	contributor,
+	requirePermission("agentRun.control"),
 	starting,
 	agentController.resumeRun,
 )
 agentRoutes.post(
 	"/:workspaceId/agent-runs/:runId/stop",
 	workspaceScope,
-	contributor,
+	requirePermission("agentRun.control"),
 	agentController.stopRun,
 )
 agentRoutes.post(
 	"/:workspaceId/agent-runs/:runId/retry",
 	workspaceScope,
-	contributor,
+	requirePermission("agentRun.control"),
 	starting,
 	agentController.retryRun,
 )

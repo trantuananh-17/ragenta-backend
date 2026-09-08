@@ -2,7 +2,8 @@ import { Hono } from "hono"
 
 import { rateLimit } from "../../api/middleware/rate-limit"
 import { requireAuth } from "../../api/middleware/session"
-import { requireWorkspaceRole, workspaceScope } from "../../api/middleware/workspace-scope"
+import { requirePermission } from "../../api/middleware/require-permission"
+import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
 import { chatController } from "./chat.controller"
 
@@ -17,7 +18,6 @@ export const chatRoutes = new Hono<AppEnv>()
 
 chatRoutes.use("*", requireAuth)
 
-const contributor = requireWorkspaceRole("owner", "admin", "member")
 
 /**
  * Sending is the expensive verb here: it retrieves, it calls a provider, and it
@@ -36,7 +36,7 @@ chatRoutes.get("/:workspaceId/conversations", workspaceScope, chatController.lis
 chatRoutes.post(
 	"/:workspaceId/conversations",
 	workspaceScope,
-	contributor,
+	requirePermission("conversation.create"),
 	chatController.createConversation,
 )
 chatRoutes.get(
@@ -47,13 +47,13 @@ chatRoutes.get(
 chatRoutes.patch(
 	"/:workspaceId/conversations/:conversationId",
 	workspaceScope,
-	contributor,
+	requirePermission("conversation.update"),
 	chatController.updateConversation,
 )
 chatRoutes.delete(
 	"/:workspaceId/conversations/:conversationId",
 	workspaceScope,
-	contributor,
+	requirePermission("conversation.delete"),
 	chatController.deleteConversation,
 )
 chatRoutes.get(
@@ -64,20 +64,20 @@ chatRoutes.get(
 chatRoutes.post(
 	"/:workspaceId/conversations/:conversationId/messages",
 	workspaceScope,
-	contributor,
+	requirePermission("chat.send"),
 	sending,
 	chatController.sendMessage,
 )
 chatRoutes.post(
 	"/:workspaceId/conversations/:conversationId/messages/stream",
 	workspaceScope,
-	contributor,
+	requirePermission("chat.send"),
 	sending,
 	chatController.streamMessage,
 )
 chatRoutes.post(
 	"/:workspaceId/conversations/:conversationId/messages/:messageId/stop",
 	workspaceScope,
-	contributor,
+	requirePermission("chat.send"),
 	chatController.stopMessage,
 )

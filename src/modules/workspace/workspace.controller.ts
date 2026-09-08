@@ -1,5 +1,6 @@
 import type { AppContext } from "../../api/types"
 import { requireMembership, requireParam, requireUser } from "../../api/types"
+import { permissionService } from "../rbac/permission.service"
 import { paginationQuerySchema } from "../../shared/pagination"
 import {
 	createWorkspaceSchema,
@@ -31,6 +32,11 @@ export const workspaceController = {
 		const membership = requireMembership(c)
 		const overview = await workspaceService.getOverview(membership.organizationId)
 		return c.json({ ...overview, role: membership.role })
+	},
+
+	async listPermissions(c: AppContext) {
+		const membership = requireMembership(c)
+		return c.json(await permissionService.describeForMember(membership.id))
 	},
 
 	async update(c: AppContext) {

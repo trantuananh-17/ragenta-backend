@@ -39,9 +39,12 @@ export type PermissionDefinition = {
 /**
  * What a member of a workspace may do inside it.
  *
- * Every entry mirrors a route or a domain operation that exists today. A
- * permission with nothing enforcing it is worse than no permission: it reads on
- * the roles screen as a control that does something.
+ * Almost every entry mirrors a route that exists today — a permission with
+ * nothing enforcing it reads on the roles screen as a control that does
+ * something. The exceptions are named here rather than left to be discovered:
+ * `role.*` is enforced from phase 4 of `PLATFORM-ROADMAP.md` and `apiKey.*` from
+ * phase 16, and both are in the catalogue now because a role composed today
+ * should not need re-composing when they land.
  */
 const WORKSPACE_PERMISSIONS = [
 	{
@@ -411,6 +414,13 @@ const WORKSPACE_PERMISSIONS = [
 		description: "Change the plan, buy credits and set auto-reload",
 	},
 	{
+		key: "transaction.read",
+		scope: "workspace",
+		resource: "transaction",
+		action: "read",
+		description: "Read the credit ledger — what every member spent",
+	},
+	{
 		key: "usage.read",
 		scope: "workspace",
 		resource: "usage",
@@ -659,13 +669,18 @@ export const PLATFORM_PERMISSION_KEYS: readonly PlatformPermissionKey[] = platfo
  * Reads that are not "seeing the product" but "seeing how the workspace is run".
  *
  * `action === "read"` is a good enough rule for the rest of the catalogue and a
- * wrong one for these three: the pending-invitation list is the membership
- * pipeline, the audit trail is who did what, and an API key list names the
- * automations that hold the workspace's credentials. Each was gated to
- * owner/admin before permissions existed, and treating them as ordinary reads
- * would have quietly widened all three.
+ * wrong one for these four: the pending-invitation list is the membership
+ * pipeline, the credit ledger names what every member spent, the audit trail is
+ * who did what, and an API key list names the automations that hold the
+ * workspace's credentials. Each was gated to owner/admin before permissions
+ * existed, and treating them as ordinary reads would have quietly widened them.
  */
-const RESTRICTED_READ_KEYS: readonly string[] = ["invitation.read", "audit.read", "apiKey.read"]
+const RESTRICTED_READ_KEYS: readonly string[] = [
+	"invitation.read",
+	"transaction.read",
+	"audit.read",
+	"apiKey.read",
+]
 
 /** The reads any member of a workspace gets, and everything a viewer gets. */
 const generalReadKeys = WORKSPACE_PERMISSIONS.filter(

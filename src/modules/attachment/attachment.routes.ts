@@ -1,7 +1,8 @@
 import { Hono } from "hono"
 
 import { requireAuth } from "../../api/middleware/session"
-import { requireWorkspaceRole, workspaceScope } from "../../api/middleware/workspace-scope"
+import { requirePermission } from "../../api/middleware/require-permission"
+import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
 import { attachmentController } from "./attachment.controller"
 
@@ -17,12 +18,11 @@ export const attachmentRoutes = new Hono<AppEnv>()
 
 attachmentRoutes.use("*", requireAuth)
 
-const contributor = requireWorkspaceRole("owner", "admin", "member")
 
 attachmentRoutes.post(
 	"/:workspaceId/attachments",
 	workspaceScope,
-	contributor,
+	requirePermission("attachment.create"),
 	attachmentController.upload,
 )
 attachmentRoutes.get(
@@ -38,6 +38,6 @@ attachmentRoutes.get(
 attachmentRoutes.delete(
 	"/:workspaceId/attachments/:attachmentId",
 	workspaceScope,
-	contributor,
+	requirePermission("attachment.delete"),
 	attachmentController.remove,
 )

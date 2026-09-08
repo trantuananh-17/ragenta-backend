@@ -1,7 +1,8 @@
 import { Hono } from "hono"
 
 import { requireAuth } from "../../api/middleware/session"
-import { requireWorkspaceRole, workspaceScope } from "../../api/middleware/workspace-scope"
+import { requirePermission } from "../../api/middleware/require-permission"
+import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
 import { knowledgeController } from "./knowledge.controller"
 
@@ -18,7 +19,6 @@ export const knowledgeRoutes = new Hono<AppEnv>()
 
 knowledgeRoutes.use("*", requireAuth)
 
-const contributor = requireWorkspaceRole("owner", "admin", "member")
 
 /**
  * The chunking strategies this deployment offers. Workspace-scoped only so it
@@ -39,7 +39,7 @@ knowledgeRoutes.get(
 knowledgeRoutes.post(
 	"/:workspaceId/knowledge-bases",
 	workspaceScope,
-	contributor,
+	requirePermission("knowledgeBase.create"),
 	knowledgeController.createBase,
 )
 knowledgeRoutes.get(
@@ -50,13 +50,13 @@ knowledgeRoutes.get(
 knowledgeRoutes.patch(
 	"/:workspaceId/knowledge-bases/:baseId",
 	workspaceScope,
-	contributor,
+	requirePermission("knowledgeBase.update"),
 	knowledgeController.updateBase,
 )
 knowledgeRoutes.delete(
 	"/:workspaceId/knowledge-bases/:baseId",
 	workspaceScope,
-	requireWorkspaceRole("owner", "admin"),
+	requirePermission("knowledgeBase.delete"),
 	knowledgeController.deleteBase,
 )
 
@@ -68,7 +68,7 @@ knowledgeRoutes.get(
 knowledgeRoutes.post(
 	"/:workspaceId/knowledge-bases/:baseId/documents",
 	workspaceScope,
-	contributor,
+	requirePermission("document.create"),
 	knowledgeController.uploadDocument,
 )
 
@@ -95,18 +95,18 @@ knowledgeRoutes.get(
 knowledgeRoutes.post(
 	"/:workspaceId/documents/:documentId/reindex",
 	workspaceScope,
-	contributor,
+	requirePermission("document.update"),
 	knowledgeController.reindexDocument,
 )
 knowledgeRoutes.post(
 	"/:workspaceId/documents/:documentId/cancel",
 	workspaceScope,
-	contributor,
+	requirePermission("document.update"),
 	knowledgeController.cancelDocument,
 )
 knowledgeRoutes.delete(
 	"/:workspaceId/documents/:documentId",
 	workspaceScope,
-	contributor,
+	requirePermission("document.delete"),
 	knowledgeController.deleteDocument,
 )

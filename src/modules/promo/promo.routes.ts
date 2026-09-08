@@ -1,7 +1,8 @@
 import { Hono } from "hono"
 
 import { requireAuth } from "../../api/middleware/session"
-import { requireWorkspaceRole, workspaceScope } from "../../api/middleware/workspace-scope"
+import { requirePermission } from "../../api/middleware/require-permission"
+import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
 import { promoController } from "./promo.controller"
 
@@ -22,6 +23,6 @@ promoRoutes.get(
 promoRoutes.post(
 	"/:workspaceId/billing/promo-codes/redeem",
 	workspaceScope,
-	requireWorkspaceRole("owner", "admin"),
+	requirePermission("promo.redeem"),
 	promoController.redeem,
 )

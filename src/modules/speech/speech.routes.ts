@@ -2,7 +2,8 @@ import { Hono } from "hono"
 
 import { rateLimit } from "../../api/middleware/rate-limit"
 import { requireAuth } from "../../api/middleware/session"
-import { requireWorkspaceRole, workspaceScope } from "../../api/middleware/workspace-scope"
+import { requirePermission } from "../../api/middleware/require-permission"
+import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
 import { speechController } from "./speech.controller"
 
@@ -18,7 +19,6 @@ export const speechRoutes = new Hono<AppEnv>()
 
 speechRoutes.use("*", requireAuth)
 
-const contributor = requireWorkspaceRole("owner", "admin", "member")
 
 /** Both routes are a paid provider call each. Counted together, per person. */
 const speaking = rateLimit({
@@ -31,14 +31,14 @@ const speaking = rateLimit({
 speechRoutes.post(
 	"/:workspaceId/attachments/:attachmentId/transcribe",
 	workspaceScope,
-	contributor,
+	requirePermission("speech.transcribe"),
 	speaking,
 	speechController.transcribe,
 )
 speechRoutes.post(
 	"/:workspaceId/speech",
 	workspaceScope,
-	contributor,
+	requirePermission("speech.synthesize"),
 	speaking,
 	speechController.synthesize,
 )

@@ -1,7 +1,8 @@
 import { Hono } from "hono"
 
 import { requireAuth } from "../../api/middleware/session"
-import { requireWorkspaceRole, workspaceScope } from "../../api/middleware/workspace-scope"
+import { requirePermission } from "../../api/middleware/require-permission"
+import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
 import { modelController } from "./model.controller"
 
@@ -19,6 +20,6 @@ modelRoutes.get("/:workspaceId/settings/models", workspaceScope, modelController
 modelRoutes.put(
 	"/:workspaceId/settings/models",
 	workspaceScope,
-	requireWorkspaceRole("owner", "admin"),
+	requirePermission("model.manage"),
 	modelController.updateSettings,
 )
