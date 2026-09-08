@@ -534,6 +534,14 @@ const PLATFORM_PERMISSIONS = [
 	},
 
 	{
+		key: "admin.usage.read",
+		scope: "platform",
+		resource: "admin.usage",
+		action: "read",
+		description: "See what every model and workspace has spent, across the platform",
+	},
+
+	{
 		key: "admin.promo.read",
 		scope: "platform",
 		resource: "admin.promo",
@@ -815,6 +823,7 @@ const PLATFORM_SYSTEM_ROLES = [
 			"admin.workspace.read",
 			"admin.workspace.manage",
 			"admin.credit.adjust",
+			"admin.usage.read",
 			"admin.promo.read",
 			"admin.promo.manage",
 			"admin.model.read",
@@ -830,6 +839,7 @@ const PLATFORM_SYSTEM_ROLES = [
 			"admin.console.access",
 			"admin.user.read",
 			"admin.workspace.read",
+			"admin.usage.read",
 			"admin.promo.read",
 			"admin.provider.read",
 			"admin.model.read",
