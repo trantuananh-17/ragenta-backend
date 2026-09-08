@@ -138,6 +138,18 @@ export const resumeRunSchema = z.object({
 	answers: z.record(z.string().min(1).max(60), z.string().max(4_000)),
 })
 
+/**
+ * Which two versions to compare. Both required rather than defaulting to "the
+ * previous one": a diff whose left-hand side was guessed is one somebody reads
+ * the wrong way round.
+ */
+export const versionDiffQuerySchema = z.object({
+	from: z.coerce.number().int().positive(),
+	to: z.coerce.number().int().positive(),
+})
+
+export type VersionDiffQuery = z.infer<typeof versionDiffQuerySchema>
+
 export type AgentConfigInput = z.infer<typeof agentConfigSchema>
 export type CreateAgentInput = z.infer<typeof createAgentSchema>
 export type UpdateAgentInput = z.infer<typeof updateAgentSchema>

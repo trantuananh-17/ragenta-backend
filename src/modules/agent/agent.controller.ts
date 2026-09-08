@@ -11,6 +11,7 @@ import {
 	resumeRunSchema,
 	runAgentSchema,
 	updateAgentSchema,
+	versionDiffQuerySchema,
 } from "./agent.dto"
 import { agentService } from "./agent.service"
 import { agentRunner } from "./runner"
@@ -66,6 +67,33 @@ export const agentController = {
 		const membership = requireMembership(c)
 		return c.json(
 			await agentService.listVersions(membership.organizationId, requireParam(c, "agentId")),
+		)
+	},
+
+	async diffVersions(c: AppContext) {
+		const membership = requireMembership(c)
+		const { from, to } = versionDiffQuerySchema.parse(c.req.query())
+		return c.json(
+			await agentService.diffVersions(
+				membership.organizationId,
+				requireParam(c, "agentId"),
+				from,
+				to,
+			),
+		)
+	},
+
+	async restoreVersion(c: AppContext) {
+		const user = requireUser(c)
+		const membership = requireMembership(c)
+		return c.json(
+			await agentService.restoreVersion(
+				membership.organizationId,
+				requireParam(c, "agentId"),
+				Number(requireParam(c, "version")),
+				user.id,
+			),
+			201,
 		)
 	},
 

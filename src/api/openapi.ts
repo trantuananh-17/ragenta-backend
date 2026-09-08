@@ -33,6 +33,7 @@ import {
 } from "../modules/datasource/datasource.dto"
 import { saveMcpServerSchema } from "../modules/mcp/mcp.dto"
 import { saveWebhookEndpointSchema } from "../modules/webhook/webhook.dto"
+import { versionDiffQuerySchema } from "../modules/agent/agent.dto"
 import { saveOAuthClientSchema, startOAuthSchema } from "../modules/oauth/oauth.dto"
 import { updateModelSettingsSchema } from "../modules/model/model.dto"
 import {
@@ -979,6 +980,18 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary: "The MCP tools an agent version may name",
 		tags: ["Agents"],
 		access: "mcpServer.read",
+	},
+	"GET /v1/workspaces/:workspaceId/agents/:agentId/versions/diff": {
+		summary: "What changed between two versions of an agent",
+		tags: ["Agents"],
+		access: "agent.read",
+		query: versionDiffQuerySchema,
+	},
+	"POST /v1/workspaces/:workspaceId/agents/:agentId/versions/:version/restore": {
+		summary: "Go back to an earlier version by publishing it again",
+		tags: ["Agents"],
+		access: "agent.publish",
+		status: 201,
 	},
 	"GET /v1/workspaces/:workspaceId/agent-templates": {
 		summary: "Agents you can start from, with each one's tools marked available or not",
