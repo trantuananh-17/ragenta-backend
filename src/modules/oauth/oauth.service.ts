@@ -80,7 +80,12 @@ async function resolveClient(provider: OAuthProvider): Promise<ResolvedClient> {
 }
 
 export const oauthService = {
-	/** The providers this build knows, with whether the deployment has configured each. */
+	/**
+	 * The providers this build knows, with whether a workspace may connect each.
+	 *
+	 * `configured` answers that one question, so a provider registered but switched
+	 * off reads as unavailable here — which it is.
+	 */
 	async listProviders() {
 		const settings = await readClientSettings()
 
@@ -90,6 +95,41 @@ export const oauthService = {
 			scopes: provider.scopes,
 			configured: settings[provider.id]?.enabled === true && Boolean(settings[provider.id]?.clientId),
 		}))
+	},
+
+	/**
+	 * The same list for the console, which needs the facts behind `configured`.
+	 *
+	 * Registered and switched on are two things, and collapsing them was why a
+	 * save with the toggle left off looked like a save that had not happened: the
+	 * card said "not registered" about a client id it had just stored.
+	 *
+	 * The **client id is returned**. It is not a secret — it travels in the query
+	 * string of every consent screen — and an administrator who cannot read back
+	 * the one that is stored has no way to tell this deployment's app from another
+	 * one, or to notice a typo. The secret is not returned, ever; `hasSecret` is
+	 * the only thing said about it.
+	 */
+	async listForAdmin() {
+		const settings = await readClientSettings()
+
+		return Promise.all(
+			OAUTH_PROVIDERS.map(async (provider) => {
+				const entry = settings[provider.id]
+				const credential = await providerRepository.findCredential(oauthCredentialId(provider.id))
+
+				return {
+					id: provider.id,
+					name: provider.name,
+					scopes: provider.scopes,
+					configured: entry?.enabled === true && Boolean(entry.clientId),
+					registered: Boolean(entry?.clientId) && Boolean(credential),
+					enabled: entry?.enabled === true,
+					clientId: entry?.clientId ?? "",
+					hasSecret: Boolean(credential),
+				}
+			}),
+		)
 	},
 
 	async list(workspaceId: string) {
@@ -334,7 +374,7 @@ export const oauthService = {
 			metadata: { enabled: input.enabled, secretChanged: Boolean(input.clientSecret) },
 		})
 
-		return oauthService.listProviders()
+		return oauthService.listForAdmin()
 	},
 
 	/** The redirect URI to register with the provider. Fixed, and worth showing. */
