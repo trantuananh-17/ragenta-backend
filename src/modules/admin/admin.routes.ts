@@ -9,6 +9,7 @@ import type { AppEnv } from "../../api/types"
 import { promoController } from "../promo/promo.controller"
 import { integrationController } from "../integration/integration.controller"
 import { providerController } from "../provider/provider.controller"
+import { rbacController } from "../rbac/rbac.controller"
 import { adminController } from "./admin.controller"
 import { speechAdminController } from "../speech/speech.admin.controller"
 
@@ -195,4 +196,57 @@ adminRoutes.put(
 	"/settings/model-access/:plan",
 	requirePlatformPermission("admin.model.manage"),
 	providerController.setPlanModelAccess,
+)
+
+// Roles and permissions. The catalogue is read-only — it is the release's list of
+// what can be checked — and everything else composes and hands out what is in it.
+adminRoutes.get(
+	"/permissions",
+	requirePlatformPermission("admin.role.read"),
+	rbacController.listPermissions,
+)
+adminRoutes.get("/roles", requirePlatformPermission("admin.role.read"), rbacController.listRoles)
+adminRoutes.post(
+	"/roles",
+	requirePlatformPermission("admin.role.manage"),
+	rbacController.createRole,
+)
+adminRoutes.get(
+	"/roles/:roleId",
+	requirePlatformPermission("admin.role.read"),
+	rbacController.getRole,
+)
+adminRoutes.patch(
+	"/roles/:roleId",
+	requirePlatformPermission("admin.role.manage"),
+	rbacController.updateRole,
+)
+adminRoutes.delete(
+	"/roles/:roleId",
+	requirePlatformPermission("admin.role.manage"),
+	rbacController.deleteRole,
+)
+
+adminRoutes.get(
+	"/users/:userId/platform-roles",
+	requirePlatformPermission("admin.role.read"),
+	rbacController.listPlatformRoles,
+)
+adminRoutes.put(
+	"/users/:userId/platform-roles",
+	requirePlatformPermission("admin.role.manage"),
+	rbacController.setPlatformRoles,
+)
+
+// The admin API could read a workspace but not administer its members. It can
+// now change what one may do, which is the point of the whole model.
+adminRoutes.get(
+	"/workspaces/:workspaceId/members/:memberId/roles",
+	requirePlatformPermission("admin.role.read"),
+	rbacController.listMemberRoles,
+)
+adminRoutes.put(
+	"/workspaces/:workspaceId/members/:memberId/roles",
+	requirePlatformPermission("admin.role.manage"),
+	rbacController.setMemberRoles,
 )

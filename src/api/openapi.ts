@@ -43,6 +43,12 @@ import {
 	updateProjectSchema,
 } from "../modules/project/project.dto"
 import {
+	createRoleSchema,
+	listRolesQuerySchema,
+	setRolesSchema,
+	updateRoleSchema,
+} from "../modules/rbac/rbac.dto"
+import {
 	synthesizeSpeechSchema,
 	transcribeAttachmentSchema,
 } from "../modules/speech/speech.dto"
@@ -771,6 +777,63 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary: "Set which models one plan may offer",
 		tags: ["Admin"],
 		access: "admin.model.manage",
+	},
+	"GET /v1/admin/permissions": {
+		summary: "The permission catalogue this release checks",
+		tags: ["Admin"],
+		access: "admin.role.read",
+	},
+	"GET /v1/admin/roles": {
+		summary: "List roles and what each one may do",
+		tags: ["Admin"],
+		access: "admin.role.read",
+		query: listRolesQuerySchema,
+	},
+	"POST /v1/admin/roles": {
+		summary: "Create a role",
+		tags: ["Admin"],
+		access: "admin.role.manage",
+		body: createRoleSchema,
+		status: 201,
+	},
+	"GET /v1/admin/roles/:roleId": {
+		summary: "Read one role",
+		tags: ["Admin"],
+		access: "admin.role.read",
+	},
+	"PATCH /v1/admin/roles/:roleId": {
+		summary: "Rename a role or change what it may do",
+		tags: ["Admin"],
+		access: "admin.role.manage",
+		body: updateRoleSchema,
+	},
+	"DELETE /v1/admin/roles/:roleId": {
+		summary: "Delete a role nobody holds",
+		tags: ["Admin"],
+		access: "admin.role.manage",
+		status: 204,
+	},
+	"GET /v1/admin/users/:userId/platform-roles": {
+		summary: "The console roles somebody holds",
+		tags: ["Admin"],
+		access: "admin.role.read",
+	},
+	"PUT /v1/admin/users/:userId/platform-roles": {
+		summary: "Set the console roles somebody holds",
+		tags: ["Admin"],
+		access: "admin.role.manage",
+		body: setRolesSchema,
+	},
+	"GET /v1/admin/workspaces/:workspaceId/members/:memberId/roles": {
+		summary: "The roles a workspace member holds",
+		tags: ["Admin"],
+		access: "admin.role.read",
+	},
+	"PUT /v1/admin/workspaces/:workspaceId/members/:memberId/roles": {
+		summary: "Set the roles a workspace member holds",
+		tags: ["Admin"],
+		access: "admin.role.manage",
+		body: setRolesSchema,
 	},
 
 	"GET /v1/workspaces/:workspaceId/billing/promo-codes": {
