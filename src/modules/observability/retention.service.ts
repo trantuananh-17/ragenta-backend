@@ -1,5 +1,6 @@
 import { env } from "../../config/env"
 import { logger } from "../../shared/logger"
+import { webhookRepository } from "../webhook/webhook.repository"
 import { errorLogService } from "./error-log.service"
 
 const log = logger.child({ module: "observability" })
@@ -36,6 +37,25 @@ export const retentionService = {
 			more: deleted === SWEEP_BATCH,
 		})
 
+		return { days, deleted }
+	},
+
+	/**
+	 * Drops delivery rows past the same window.
+	 *
+	 * The delivery log grows with traffic rather than with what is wrong, so it
+	 * needs this more than the error log does — but it is the same decision, so it
+	 * reads the same setting rather than gaining one nobody would think to change
+	 * independently.
+	 */
+	async pruneWebhookDeliveries() {
+		const days = env.observability.providerErrorRetentionDays
+		if (days <= 0) return { days, deleted: 0 }
+
+		const cutoff = new Date(Date.now() - days * 86_400_000)
+		const deleted = await webhookRepository.pruneDeliveriesOlderThan(cutoff, SWEEP_BATCH)
+
+		log.info("webhook.retention.swept", { days, deleted, more: deleted === SWEEP_BATCH })
 		return { days, deleted }
 	},
 }

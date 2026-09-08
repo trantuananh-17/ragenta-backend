@@ -400,6 +400,21 @@ const WORKSPACE_PERMISSIONS = [
 	},
 
 	{
+		key: "webhook.read",
+		scope: "workspace",
+		resource: "webhook",
+		action: "read",
+		description: "See where this workspace sends events, and whether deliveries worked",
+	},
+	{
+		key: "webhook.manage",
+		scope: "workspace",
+		resource: "webhook",
+		action: "manage",
+		description: "Add or remove a webhook endpoint and rotate its signing secret",
+	},
+
+	{
 		key: "widget.read",
 		scope: "workspace",
 		resource: "widget",
@@ -786,6 +801,10 @@ const RESTRICTED_READ_KEYS: readonly string[] = [
 	"transaction.read",
 	"audit.read",
 	"apiKey.read",
+	// The list names the URLs this workspace posts its own data to, which reads
+	// closer to the audit log than to a setting somebody configuring an agent
+	// needs. It also carries each endpoint's failure history.
+	"webhook.read",
 ]
 
 /** The reads any member of a workspace gets, and everything a viewer gets. */

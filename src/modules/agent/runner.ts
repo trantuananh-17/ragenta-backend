@@ -34,6 +34,7 @@ import { runGraph } from "./graph/engine"
 import type { NodeContext } from "./graph/nodes"
 import { runApprovedTool, runToolLoop } from "./loop"
 import { memoryService } from "../memory/memory.service"
+import { webhookService } from "../webhook/webhook.service"
 import { databaseToolFor, mcpToolsFor, toolWrites, toolsFor } from "./tools"
 import { renderMemories } from "./tools/memory-content"
 import { clearStop, isStopRequested } from "./stop-signal"
@@ -610,14 +611,16 @@ export const agentRunner = {
 			if (finished) return
 			finished = true
 
+			const status = awaiting
+				? "awaiting_input"
+				: stopped
+					? "stopped"
+					: failure || answer.length === 0
+						? "failed"
+						: "succeeded"
+
 			await agentRepository.updateRun(run.id, {
-				status: awaiting
-					? "awaiting_input"
-					: stopped
-						? "stopped"
-						: failure || answer.length === 0
-							? "failed"
-							: "succeeded",
+				status,
 				output: answer.length > 0 ? answer : null,
 				error: failure ? failure.slice(0, 500) : null,
 				credits: credits.toFixed(4),
@@ -627,6 +630,25 @@ export const agentRunner = {
 				// A run still waiting for a person has not finished.
 				...(awaiting ? {} : { finishedAt: new Date() }),
 			})
+
+			// After the row is written, never before: a webhook that arrives ahead
+			// of the state it describes sends the receiver to an API that still
+			// says the run is going. `emit` never throws, so a subscriber's
+			// problem cannot become this run's (ADR-067).
+			//
+			// Only the two terminal outcomes. A stopped run was somebody pressing
+			// stop and a paused one has not finished, so neither is news.
+			if (status === "succeeded" || status === "failed") {
+				await webhookService.emit(workspaceId, `agent.run.${status}`, {
+					runId: run.id,
+					agentId: prepared.agent.id,
+					agentName: prepared.agent.name,
+					trigger: run.trigger,
+					credits: Number(credits.toFixed(4)),
+					durationMs: Date.now() - run.startedAt.getTime(),
+					...(status === "failed" ? { error: failure ?? "The run produced no answer." } : {}),
+				})
+			}
 		}
 
 		/**
