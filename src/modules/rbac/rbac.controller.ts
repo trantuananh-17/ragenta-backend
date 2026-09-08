@@ -1,7 +1,8 @@
 import type { AppContext } from "../../api/types"
-import { requireParam, requireUser } from "../../api/types"
+import { requireMembership, requireParam, requireUser } from "../../api/types"
 import {
 	createRoleSchema,
+	createWorkspaceRoleSchema,
 	listRolesQuerySchema,
 	setRolesSchema,
 	updateRoleSchema,
@@ -65,6 +66,71 @@ export const rbacController = {
 		const input = setRolesSchema.parse(await c.req.json())
 		const roles = await rbacService.setMemberRoles(
 			requireParam(c, "workspaceId"),
+			requireParam(c, "memberId"),
+			input.roleIds,
+			actor,
+		)
+		return c.json({ roles })
+	},
+
+	async listWorkspaceRoles(c: AppContext) {
+		const membership = requireMembership(c)
+		return c.json({ roles: await rbacService.listWorkspaceRoles(membership.organizationId) })
+	},
+
+	async createWorkspaceRole(c: AppContext) {
+		const actor = requireUser(c)
+		const membership = requireMembership(c)
+		const input = createWorkspaceRoleSchema.parse(await c.req.json())
+		const role = await rbacService.createWorkspaceRole(
+			membership.organizationId,
+			membership,
+			input,
+			actor,
+		)
+		return c.json({ role }, 201)
+	},
+
+	async updateWorkspaceRole(c: AppContext) {
+		const actor = requireUser(c)
+		const membership = requireMembership(c)
+		const input = updateRoleSchema.parse(await c.req.json())
+		const role = await rbacService.updateWorkspaceRole(
+			membership.organizationId,
+			membership,
+			requireParam(c, "roleId"),
+			input,
+			actor,
+		)
+		return c.json({ role })
+	},
+
+	async deleteWorkspaceRole(c: AppContext) {
+		const actor = requireUser(c)
+		const membership = requireMembership(c)
+		await rbacService.deleteWorkspaceRole(
+			membership.organizationId,
+			requireParam(c, "roleId"),
+			actor,
+		)
+		return c.body(null, 204)
+	},
+
+	async listWorkspaceMemberRoles(c: AppContext) {
+		const membership = requireMembership(c)
+		const roles = await rbacService.listMemberRoles(
+			membership.organizationId,
+			requireParam(c, "memberId"),
+		)
+		return c.json({ roles })
+	},
+
+	async setWorkspaceMemberRoles(c: AppContext) {
+		const actor = requireUser(c)
+		const membership = requireMembership(c)
+		const input = setRolesSchema.parse(await c.req.json())
+		const roles = await rbacService.setMemberRoles(
+			membership.organizationId,
 			requireParam(c, "memberId"),
 			input.roleIds,
 			actor,
