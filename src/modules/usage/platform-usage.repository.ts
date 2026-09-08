@@ -107,6 +107,30 @@ export const platformUsageRepository = {
 			.orderBy(sql`date_trunc('day', ${usageLedger.createdAt})`)
 	},
 
+	/**
+	 * How long provider calls are taking, as percentiles.
+	 *
+	 * `percentile_cont` in Postgres rather than sorting the durations in Node, for
+	 * the reason every other aggregate here runs in SQL — and rows with no
+	 * duration are excluded rather than counted as zero, which would drag every
+	 * percentile toward a number nothing actually took (ADR-063).
+	 */
+	async latency(from: Date, to: Date, executor: DbExecutor = db) {
+		return executor
+			.select({
+				operation: usageLedger.operation,
+				calls: sql<number>`count(*)::int`,
+				p50: sql<number>`percentile_cont(0.5) within group (order by ${usageLedger.durationMs})::int`,
+				p95: sql<number>`percentile_cont(0.95) within group (order by ${usageLedger.durationMs})::int`,
+				p99: sql<number>`percentile_cont(0.99) within group (order by ${usageLedger.durationMs})::int`,
+				slowest: sql<number>`max(${usageLedger.durationMs})::int`,
+			})
+			.from(usageLedger)
+			.where(and(within(from, to), sql`${usageLedger.durationMs} is not null`))
+			.groupBy(usageLedger.operation)
+			.orderBy(sql`count(*) desc`)
+	},
+
 	async totals(from: Date, to: Date, executor: DbExecutor = db) {
 		const rows = await executor
 			.select({

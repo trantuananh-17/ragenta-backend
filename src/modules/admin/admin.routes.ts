@@ -11,6 +11,7 @@ import { integrationController } from "../integration/integration.controller"
 import { providerController } from "../provider/provider.controller"
 import { mcpController } from "../mcp/mcp.controller"
 import { oauthController } from "../oauth/oauth.controller"
+import { observabilityController } from "../observability/observability.controller"
 import { rbacController } from "../rbac/rbac.controller"
 import { platformUsageController } from "../usage/usage.controller"
 import { adminController } from "./admin.controller"
@@ -307,4 +308,12 @@ adminRoutes.put(
 	"/oauth-providers/:provider",
 	requirePlatformPermission("admin.oauth.manage"),
 	oauthController.saveClient,
+)
+
+// Provider calls that failed. Beside the spend deliberately: "what is this
+// costing" and "what is failing" are read at the same moment (ADR-063).
+adminRoutes.get(
+	"/provider-errors",
+	requirePlatformPermission("admin.errors.read"),
+	observabilityController.listPlatformErrors,
 )

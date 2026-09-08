@@ -895,6 +895,17 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		access: "admin.usage.read",
 		query: platformUsageQuerySchema,
 	},
+	"GET /v1/admin/provider-errors": {
+		summary: "Provider calls that failed, and how often each kind is failing",
+		tags: ["Admin"],
+		access: "admin.errors.read",
+		query: platformUsageQuerySchema,
+	},
+	"GET /v1/workspaces/:workspaceId/provider-errors": {
+		summary: "This workspace's own failed provider calls",
+		tags: ["Workspaces"],
+		access: "usage.read",
+	},
 	"GET /v1/admin/mcp-servers": {
 		summary: "MCP servers configured for the whole deployment",
 		tags: ["Admin"],
