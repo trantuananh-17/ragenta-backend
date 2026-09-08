@@ -25,6 +25,12 @@ import {
 	reindexDocumentSchema,
 	updateKnowledgeBaseSchema,
 } from "../modules/knowledge/knowledge.dto"
+import {
+	dryRunSchema,
+	generateQuerySchema,
+	saveDataSourceSchema,
+	saveQuerySchema,
+} from "../modules/datasource/datasource.dto"
 import { saveMcpServerSchema } from "../modules/mcp/mcp.dto"
 import { saveOAuthClientSchema, startOAuthSchema } from "../modules/oauth/oauth.dto"
 import { updateModelSettingsSchema } from "../modules/model/model.dto"
@@ -989,6 +995,52 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary: "Accounts this workspace has connected",
 		tags: ["Agents"],
 		access: "oauthConnection.read",
+	},
+	"GET /v1/workspaces/:workspaceId/data-sources": {
+		summary: "Databases this workspace has connected, with their approved queries",
+		tags: ["Agents"],
+		access: "dataSource.read",
+	},
+	"PUT /v1/workspaces/:workspaceId/data-sources": {
+		summary: "Connect a database. The engine is read from the connection string",
+		tags: ["Agents"],
+		access: "dataSource.manage",
+		body: saveDataSourceSchema,
+	},
+	"POST /v1/workspaces/:workspaceId/data-sources/:sourceId/schema": {
+		summary: "Read the tables and columns, and record whether the connection worked",
+		tags: ["Agents"],
+		access: "dataSource.manage",
+	},
+	"DELETE /v1/workspaces/:workspaceId/data-sources/:sourceId": {
+		summary: "Remove a database connection and every query on it",
+		tags: ["Agents"],
+		access: "dataSource.manage",
+		status: 204,
+	},
+	"POST /v1/workspaces/:workspaceId/data-queries/generate": {
+		summary: "Propose a query from a plain-language description. Saves nothing",
+		tags: ["Agents"],
+		access: "dataSource.manage",
+		body: generateQuerySchema,
+	},
+	"POST /v1/workspaces/:workspaceId/data-queries/dry-run": {
+		summary: "Run a statement once so somebody can see what it returns before approving",
+		tags: ["Agents"],
+		access: "dataSource.manage",
+		body: dryRunSchema,
+	},
+	"PUT /v1/workspaces/:workspaceId/data-queries": {
+		summary: "Save a named query. A generated one stays unapproved until somebody approves it",
+		tags: ["Agents"],
+		access: "dataSource.manage",
+		body: saveQuerySchema,
+	},
+	"DELETE /v1/workspaces/:workspaceId/data-queries/:queryId": {
+		summary: "Remove a named query",
+		tags: ["Agents"],
+		access: "dataSource.manage",
+		status: 204,
 	},
 	"GET /v1/workspaces/:workspaceId/api-keys": {
 		summary: "The workspace's API keys and when each was last used",

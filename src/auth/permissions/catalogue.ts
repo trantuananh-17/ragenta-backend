@@ -400,6 +400,21 @@ const WORKSPACE_PERMISSIONS = [
 	},
 
 	{
+		key: "dataSource.read",
+		scope: "workspace",
+		resource: "dataSource",
+		action: "read",
+		description: "See the databases this workspace has connected and the approved queries",
+	},
+	{
+		key: "dataSource.manage",
+		scope: "workspace",
+		resource: "dataSource",
+		action: "manage",
+		description: "Connect a database, and write or approve a query an agent may run",
+	},
+
+	{
 		key: "oauthConnection.read",
 		scope: "workspace",
 		resource: "oauthConnection",

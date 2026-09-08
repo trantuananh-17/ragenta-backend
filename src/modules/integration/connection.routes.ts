@@ -4,6 +4,7 @@ import { requireAuth } from "../../api/middleware/session"
 import { requirePermission } from "../../api/middleware/require-permission"
 import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
+import { datasourceController } from "../datasource/datasource.controller"
 import { oauthController } from "../oauth/oauth.controller"
 import { connectionController } from "./integration.controller"
 
@@ -77,4 +78,62 @@ connectionRoutes.delete(
 	workspaceScope,
 	requirePermission("oauthConnection.manage"),
 	oauthController.disconnect,
+)
+
+/**
+ * Databases an agent may look things up in, and the queries it may run.
+ *
+ * Reading is any member — the agent screen has to name the queries an agent can
+ * call. Writing or approving one is the audience that manages every other
+ * credential here, because approving a query decides what SQL runs against a
+ * customer's own database (ADR-064).
+ */
+connectionRoutes.get(
+	"/:workspaceId/data-sources",
+	workspaceScope,
+	requirePermission("dataSource.read"),
+	datasourceController.list,
+)
+connectionRoutes.put(
+	"/:workspaceId/data-sources",
+	workspaceScope,
+	requirePermission("dataSource.manage"),
+	datasourceController.saveSource,
+)
+connectionRoutes.post(
+	"/:workspaceId/data-sources/:sourceId/schema",
+	workspaceScope,
+	requirePermission("dataSource.manage"),
+	datasourceController.refreshSchema,
+)
+connectionRoutes.delete(
+	"/:workspaceId/data-sources/:sourceId",
+	workspaceScope,
+	requirePermission("dataSource.manage"),
+	datasourceController.removeSource,
+)
+
+connectionRoutes.post(
+	"/:workspaceId/data-queries/generate",
+	workspaceScope,
+	requirePermission("dataSource.manage"),
+	datasourceController.generateQuery,
+)
+connectionRoutes.post(
+	"/:workspaceId/data-queries/dry-run",
+	workspaceScope,
+	requirePermission("dataSource.manage"),
+	datasourceController.dryRun,
+)
+connectionRoutes.put(
+	"/:workspaceId/data-queries",
+	workspaceScope,
+	requirePermission("dataSource.manage"),
+	datasourceController.saveQuery,
+)
+connectionRoutes.delete(
+	"/:workspaceId/data-queries/:queryId",
+	workspaceScope,
+	requirePermission("dataSource.manage"),
+	datasourceController.removeQuery,
 )

@@ -43,6 +43,7 @@ export const TOOL_IDS = [
 	"github_search_issues",
 	"github_create_issue",
 	"notion_search",
+	"database_query",
 ] as const
 export type ToolId = (typeof TOOL_IDS)[number]
 
@@ -246,6 +247,13 @@ export const TOOL_CATALOGUE: Record<
 		title: "Search Notion",
 		description:
 			"Find pages and databases by title in the connected Notion workspace. Returns ids and links.",
+		writes: false,
+		requires: null,
+	},
+	database_query: {
+		title: "Look something up in your database",
+		description:
+			"Run one of the approved queries against a connected database. The agent picks a query by name and fills its parameters — it never writes SQL.",
 		writes: false,
 		requires: null,
 	},
