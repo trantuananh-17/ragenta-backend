@@ -1,5 +1,12 @@
 import { lookup } from "node:dns/promises"
+import { request as httpRequest } from "node:http"
+import { request as httpsRequest } from "node:https"
 import { isIP } from "node:net"
+import { Readable } from "node:stream"
+import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib"
+
+import type { IncomingMessage } from "node:http"
+import type { RequestOptions } from "node:https"
 
 import { ValidationError } from "../../../shared/errors"
 
@@ -17,6 +24,8 @@ import { ValidationError } from "../../../shared/errors"
  * - every resolved address is checked against private, loopback, link-local and
  *   unique-local ranges — the check is on the **address**, never on the hostname,
  *   because a name an attacker controls can resolve wherever they like
+ * - the connection is made to the address that was checked, so the name is not
+ *   resolved a second time between the check and the request
  * - redirects are followed by hand and re-checked at every hop, since a public
  *   URL that 302s to 169.254.169.254 defeats a check done only once
  * - size and time are capped, so a tool cannot be used to pull a 4 GB file into
@@ -142,16 +151,21 @@ export function isBlockedAddress(address: string): boolean {
  * A name resolving to one public and one private address would otherwise be a
  * coin toss decided by whichever the connection happened to use.
  *
+ * Returns one of the addresses it vetted, so the caller can connect to *that*
+ * rather than hand the name back to the resolver. Since every answer had to pass,
+ * the first is as good as any. `safeFetch` uses it; the browser tool ignores it,
+ * because its request is made by a service elsewhere (ADR-041).
+ *
  * Exported because the browser tool sends its URL to a remote browser service
  * rather than fetching it here, and has to apply the same check first — a second
  * implementation of it would be a second place to get it wrong.
  */
-export async function assertHostAllowed(hostname: string): Promise<void> {
+export async function assertHostAllowed(hostname: string): Promise<string> {
 	if (isIP(hostname)) {
 		if (isBlockedAddress(hostname)) {
 			throw new ValidationError("That address is not reachable from this service.")
 		}
-		return
+		return hostname
 	}
 
 	let addresses: { address: string }[]
@@ -161,9 +175,12 @@ export async function assertHostAllowed(hostname: string): Promise<void> {
 		throw new ValidationError(`"${hostname}" could not be resolved.`)
 	}
 
-	if (addresses.length === 0 || addresses.some((entry) => isBlockedAddress(entry.address))) {
+	const [first] = addresses
+	if (!first || addresses.some((entry) => isBlockedAddress(entry.address))) {
 		throw new ValidationError("That address is not reachable from this service.")
 	}
+
+	return first.address
 }
 
 export interface SafeFetchResult {
@@ -209,21 +226,32 @@ export async function safeFetch(
 		if (current.protocol !== "http:" && current.protocol !== "https:") {
 			throw new ValidationError("Only http and https URLs can be fetched.")
 		}
-		await assertHostAllowed(current.hostname)
+		const address = await assertHostAllowed(current.hostname)
 
-		const response = await fetch(current, {
-			method: options.method ?? "GET",
-			// Manual, so each hop is re-checked. `follow` would let the runtime
-			// chase a redirect into a private address without asking.
-			redirect: "manual",
-			headers: {
-				// Sent so an operator reading their logs can see what this is.
-				"user-agent": "Ragenta-Agent/1.0",
-				...(carryHeaders ? options.headers : undefined),
+		const body = carryHeaders ? options.body : undefined
+		const response = await send(
+			current,
+			address,
+			{
+				method: options.method ?? "GET",
+				headers: {
+					// Sent so an operator reading their logs can see what this is.
+					"user-agent": "Ragenta-Agent/1.0",
+					// A request carrying no Accept-Encoding lets the server pick any
+					// coding it likes, and `http.request` — unlike `fetch` — hands the
+					// compressed bytes on undecoded. Asking for none keeps the body text.
+					"accept-encoding": "identity",
+					...(carryHeaders ? options.headers : undefined),
+					// `fetch` derived this from the body. Without it a request falls back
+					// to chunked encoding, which a good number of APIs refuse outright.
+					...(body === undefined
+						? undefined
+						: { "content-length": String(Buffer.byteLength(body)) }),
+				},
+				body,
 			},
-			body: carryHeaders ? options.body : undefined,
-			signal: combined,
-		})
+			combined,
+		)
 
 		if (response.status >= 300 && response.status < 400) {
 			const location = response.headers.get("location")
@@ -240,6 +268,114 @@ export async function safeFetch(
 	}
 
 	throw new ValidationError("That URL redirected too many times.")
+}
+
+/**
+ * Sends one hop to the address that was vetted, addressed to the hostname.
+ *
+ * `fetch` was doing the resolving twice: `assertHostAllowed` looked the name up
+ * and approved what came back, then `fetch` was handed the URL and looked it up
+ * again. A record with a zero TTL answering publicly for the first query and
+ * `127.0.0.1` for the second passes the check and reaches the loopback — DNS
+ * rebinding, against the one guard that stands between a model-chosen URL and
+ * the metadata endpoint. `fetch` has no hook for this: undici owns its connector
+ * and Node exports no way to reach it, so the request is made with
+ * `http`/`https`, whose socket takes a `lookup`.
+ *
+ * The vetted address goes only into that `lookup`. Everything else still names
+ * the host, which is what keeps the two things a URL rewritten to a literal IP
+ * would have destroyed: the `Host` header carries the site's name, and TLS is
+ * offered and verified against that name rather than against the address.
+ *
+ * Nothing here follows a redirect — the caller re-checks each hop and calls this
+ * again, which is how a later hop gets pinned too.
+ */
+function send(
+	url: URL,
+	address: string,
+	init: { method: string; headers: Record<string, string>; body: string | undefined },
+	signal: AbortSignal,
+): Promise<Response> {
+	const family = isIP(address)
+	const options: RequestOptions = {
+		hostname: url.hostname,
+		port: url.port || undefined,
+		path: `${url.pathname}${url.search}`,
+		method: init.method,
+		headers: init.headers,
+		signal,
+		// A pooled socket is keyed by host and port, so keeping one alive would let
+		// a later request ride a connection opened for an address vetted long ago.
+		agent: false,
+		lookup: (_hostname, lookupOptions, callback) => {
+			if (lookupOptions.all) callback(null, [{ address, family }])
+			else callback(null, address, family)
+		},
+	}
+
+	return new Promise((resolve, reject) => {
+		const onResponse = (message: IncomingMessage) => resolve(toResponse(message))
+		const request =
+			url.protocol === "https:"
+				? httpsRequest(options, onResponse)
+				: httpRequest(options, onResponse)
+		request.on("error", reject)
+		request.end(init.body)
+	})
+}
+
+/**
+ * The rest of this file reads a `Response`, and so does the browser tool, so one
+ * is built here rather than teaching the size cap a second kind of stream.
+ */
+function toResponse(message: IncomingMessage): Response {
+	const headers = new Headers()
+	for (const [name, value] of Object.entries(message.headers)) {
+		if (Array.isArray(value)) for (const item of value) headers.append(name, item)
+		else if (value !== undefined) headers.set(name, value)
+	}
+
+	const status = message.statusCode ?? 502
+	// 204, 205 and 304 are defined to carry no body, and `new Response` throws if
+	// one is handed a stream anyway.
+	if (status === 204 || status === 205 || status === 304) {
+		message.resume()
+		return new Response(null, { status, headers })
+	}
+
+	// The cast crosses Node's two stream type worlds: `toWeb` is typed against
+	// `node:stream/web` and `Response` against the global. They are the same object.
+	return new Response(Readable.toWeb(decoded(message)) as ReadableStream<Uint8Array>, {
+		status,
+		headers,
+	})
+}
+
+/**
+ * Undoes a coding the server applied anyway.
+ *
+ * The request asks for `identity`, and a server that honours it needs none of
+ * this. Enough of them do not: `http.request` hands compressed bytes on
+ * undecoded where `fetch` decoded them, so without this a page from one of
+ * those servers reaches the model as a screenful of binary presented as its
+ * text — worse than an error, because nothing about it says it failed.
+ *
+ * Decoding before the size cap rather than after is the safe order. The cap
+ * counts bytes the model would read, so a small archive that expands to
+ * gigabytes stops at 512 KB with the rest never inflated.
+ */
+function decoded(message: IncomingMessage): Readable {
+	switch (message.headers["content-encoding"]?.trim().toLowerCase()) {
+		case "gzip":
+		case "x-gzip":
+			return message.pipe(createGunzip())
+		case "deflate":
+			return message.pipe(createInflate())
+		case "br":
+			return message.pipe(createBrotliDecompress())
+		default:
+			return message
+	}
 }
 
 async function read(response: Response, finalUrl: string): Promise<SafeFetchResult> {
