@@ -34,7 +34,7 @@ import { runGraph } from "./graph/engine"
 import type { NodeContext } from "./graph/nodes"
 import { runApprovedTool, runToolLoop } from "./loop"
 import { memoryService } from "../memory/memory.service"
-import { toolWrites, toolsFor } from "./tools"
+import { mcpToolsFor, toolWrites, toolsFor } from "./tools"
 import { renderMemories } from "./tools/memory-content"
 import { clearStop, isStopRequested } from "./stop-signal"
 
@@ -882,6 +882,9 @@ export const agentRunner = {
 					}
 				: undefined,
 		)
+		// Third-party tools are resolved after the built-ins because doing so may
+		// call the servers; a run with none pays nothing.
+		tools.push(...(await mcpToolsFor(workspaceId, version.tools, hooks.signal)))
 
 		/**
 		 * Resuming an approved write: the call has to happen *before* the loop is

@@ -57,6 +57,16 @@ export interface ToolResult {
 
 export interface AgentTool {
 	name: string
+	/**
+	 * The schema to show the model, when it is not this tool's own.
+	 *
+	 * Set only by the MCP bridge, which passes a third-party server's JSON Schema
+	 * through untranslated: rebuilding somebody else's schema in zod would mean
+	 * being confidently wrong about what their tool accepts. Every built-in tool
+	 * leaves this unset and its schema is derived from `parameters`, so the two
+	 * cannot drift.
+	 */
+	jsonSchema?: Record<string, unknown>
 	/** What the model is told the tool does. This is the whole of its API docs. */
 	description: string
 	/** Validated against, and turned into the JSON Schema the model is given. */
