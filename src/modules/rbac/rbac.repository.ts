@@ -118,6 +118,33 @@ export const rbacRepository = {
 		return rows.map((row) => (row.effect === "deny" ? "deny" : "allow"))
 	},
 
+	/**
+	 * Whether this workspace has written any grant of this kind at all.
+	 *
+	 * One cheap indexed lookup that lets the common workspace — nobody has ever
+	 * written a grant — run its list queries exactly as it did before the
+	 * per-resource layer existed.
+	 */
+	async workspaceHasGrants(
+		workspaceId: string,
+		resourceType: string,
+		permissionKey: string,
+		executor: DbExecutor = db,
+	): Promise<boolean> {
+		const rows = await executor
+			.select({ id: resourceGrant.id })
+			.from(resourceGrant)
+			.where(
+				and(
+					eq(resourceGrant.organizationId, workspaceId),
+					eq(resourceGrant.resourceType, resourceType),
+					eq(resourceGrant.permissionKey, permissionKey),
+				),
+			)
+			.limit(1)
+		return rows.length > 0
+	},
+
 	async listPermissionsInScope(scope: "workspace" | "platform", executor: DbExecutor = db) {
 		return executor
 			.select()

@@ -2,6 +2,7 @@ import { chatCapableClient } from "../../ai/clients"
 import { resolveRerankModel } from "../../ai/rerank"
 import { db } from "../../db/client"
 import type { DbExecutor } from "../../db/client"
+import { agent } from "../../db/schema"
 import { ConflictError, NotFoundError, ValidationError } from "../../shared/errors"
 import { newId } from "../../shared/id"
 import type { PaginationQuery } from "../../shared/pagination"
@@ -10,6 +11,8 @@ import { auditService } from "../audit/audit.service"
 import { knowledgeService } from "../knowledge/knowledge.service"
 import { modelService } from "../model/model.service"
 import { enqueueAgentRun } from "../../queue/agent.jobs"
+import { visibilityFor } from "../rbac/visibility"
+import type { MembershipRow } from "../workspace/workspace.repository"
 import { agentRepository } from "./agent.repository"
 import { RETRYABLE_STATUSES, nextSeq, readCheckpoint } from "./checkpoint"
 import { validateGraph } from "./graph/types"
@@ -119,8 +122,14 @@ export const agentService = {
 		return TOOL_IDS.map((id) => ({ id, ...TOOL_CATALOGUE[id] }))
 	},
 
-	async list(workspaceId: string, query: PaginationQuery) {
-		const { items, total } = await agentRepository.list(workspaceId, query)
+	/** Narrowed to the agents this caller may read, page and total together (ADR-054). */
+	async list(membership: MembershipRow, query: PaginationQuery) {
+		const visible = await visibilityFor(membership, "agent", "agent.read")
+		const { items, total } = await agentRepository.list(
+			membership.organizationId,
+			query,
+			visible.unrestricted ? undefined : visible.condition(agent.id),
+		)
 		return page(items, total, query)
 	},
 

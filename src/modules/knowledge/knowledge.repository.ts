@@ -1,4 +1,5 @@
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm"
+import type { SQL } from "drizzle-orm"
 
 import { db } from "../../db/client"
 import type { DbExecutor } from "../../db/client"
@@ -18,11 +19,25 @@ export type NewChunk = typeof chunk.$inferInsert
  * URL gets nothing back unless the row belongs to the caller's workspace.
  */
 export const knowledgeRepository = {
-	async listBases(workspaceId: string, query: PaginationQuery, executor: DbExecutor = db) {
+	/**
+	 * `visible` narrows the page *and* the count (ADR-054). Both, or the total
+	 * says twenty while the page shows seventeen and a "next" button eventually
+	 * lands on nothing.
+	 */
+	async listBases(
+		workspaceId: string,
+		query: PaginationQuery,
+		visible: SQL | undefined,
+		executor: DbExecutor = db,
+	) {
+		const where = visible
+			? and(eq(knowledgeBase.organizationId, workspaceId), visible)
+			: eq(knowledgeBase.organizationId, workspaceId)
+
 		const items = await executor
 			.select()
 			.from(knowledgeBase)
-			.where(eq(knowledgeBase.organizationId, workspaceId))
+			.where(where)
 			.orderBy(desc(knowledgeBase.createdAt))
 			.limit(query.limit)
 			.offset(query.offset)
@@ -30,7 +45,7 @@ export const knowledgeRepository = {
 		const [totals] = await executor
 			.select({ value: count() })
 			.from(knowledgeBase)
-			.where(eq(knowledgeBase.organizationId, workspaceId))
+			.where(where)
 
 		return { items, total: totals?.value ?? 0 }
 	},

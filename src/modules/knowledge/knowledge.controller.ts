@@ -36,7 +36,7 @@ export const knowledgeController = {
 	async listBases(c: AppContext) {
 		const membership = requireMembership(c)
 		const query = paginationQuerySchema.parse(c.req.query())
-		return c.json(await knowledgeService.listBases(membership.organizationId, query))
+		return c.json(await knowledgeService.listBases(membership, query))
 	},
 
 	async createBase(c: AppContext) {
