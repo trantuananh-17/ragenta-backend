@@ -209,7 +209,14 @@ export const excelWriteTool: AgentTool = {
 			return {
 				ok: true,
 				content: renderWorkbookWritten(stored),
-				metadata: { ...stored },
+				/*
+					`produced` rather than letting a console infer it from the shape.
+					Several tools report an `attachmentId` and most of them mean the
+					file they *read*; only these mean a file that now exists because
+					the step ran, and that is the difference between offering somebody
+					their result and offering them their own upload back.
+				*/
+				metadata: { ...stored, produced: true },
 			}
 		} catch (error) {
 			return {

@@ -102,6 +102,9 @@ export const speechSynthesizeTool: AgentTool = {
 				}),
 				metadata: {
 					attachmentId: attachment.id,
+					/** This step created the file. See the note in `excel.tool.ts`. */
+					produced: true,
+					fileName: attachment.fileName,
 					mimeType: attachment.mimeType,
 					sizeBytes: attachment.sizeBytes,
 					characters: input.text.length,
