@@ -65,6 +65,7 @@ import {
 	transcribeAttachmentSchema,
 } from "../modules/speech/speech.dto"
 import { platformUsageQuerySchema } from "../modules/usage/platform-usage.dto"
+import { saveWidgetSchema, widgetMessageSchema } from "../modules/widget/widget.dto"
 import {
 	createWorkspaceSchema,
 	inviteMemberSchema,
@@ -1000,6 +1001,34 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary: "Databases this workspace has connected, with their approved queries",
 		tags: ["Agents"],
 		access: "dataSource.read",
+	},
+	"GET /v1/workspaces/:workspaceId/widgets": {
+		summary: "Embedded chats this workspace has published",
+		tags: ["Agents"],
+		access: "widget.read",
+	},
+	"PUT /v1/workspaces/:workspaceId/widgets": {
+		summary: "Publish or change an embedded chat. The plan decides how many",
+		tags: ["Agents"],
+		access: "widget.manage",
+		body: saveWidgetSchema,
+	},
+	"DELETE /v1/workspaces/:workspaceId/widgets/:widgetId": {
+		summary: "Take an embedded chat down",
+		tags: ["Agents"],
+		access: "widget.manage",
+		status: 204,
+	},
+	"GET /v1/widget/:publicKey/config": {
+		summary: "What the embed page renders before anybody types. No session",
+		tags: ["Embedded chat"],
+		access: "a publishable key, from an allowed origin",
+	},
+	"POST /v1/widget/:publicKey/messages": {
+		summary: "A visitor's message, answered over SSE. No session",
+		tags: ["Embedded chat"],
+		access: "a publishable key, from an allowed origin",
+		body: widgetMessageSchema,
 	},
 	"PUT /v1/workspaces/:workspaceId/data-sources": {
 		summary: "Connect a database. The engine is read from the connection string",

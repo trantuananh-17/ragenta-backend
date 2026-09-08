@@ -400,6 +400,21 @@ const WORKSPACE_PERMISSIONS = [
 	},
 
 	{
+		key: "widget.read",
+		scope: "workspace",
+		resource: "widget",
+		action: "read",
+		description: "See the embedded chats this workspace has published",
+	},
+	{
+		key: "widget.manage",
+		scope: "workspace",
+		resource: "widget",
+		action: "manage",
+		description: "Publish an embedded chat, and decide which sites may host it",
+	},
+
+	{
 		key: "dataSource.read",
 		scope: "workspace",
 		resource: "dataSource",
