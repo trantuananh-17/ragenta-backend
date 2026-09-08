@@ -9,6 +9,7 @@ import { httpRequestTool } from "./http-request.tool"
 import { imageOcrTool } from "./image-ocr.tool"
 import { imageVisionTool } from "./image-vision.tool"
 import { createKnowledgeSearchTool } from "./knowledge-search.tool"
+import { createMemoryTools } from "./memory.tool"
 import { createSaveDocumentTool } from "./save-document.tool"
 import { sendEmailTool } from "./send-email.tool"
 import { speechSynthesizeTool } from "./speech-synthesize.tool"
@@ -40,6 +41,8 @@ export const TOOL_IDS = [
 	"excel_read",
 	"excel_write",
 	"browser_read",
+	"memory_write",
+	"memory_search",
 ] as const
 export type ToolId = (typeof TOOL_IDS)[number]
 
@@ -156,6 +159,23 @@ export const TOOL_CATALOGUE: Record<
 		writes: false,
 		requires: null,
 	},
+	memory_write: {
+		title: "Remember something",
+		description:
+			"Keep one fact for future conversations. Only available on a version with memory turned on, and what it writes is only ever read back by this agent.",
+		// It writes nothing outside Ragenta, but it does change what the agent will
+		// say tomorrow — which is why it appears on the tool list rather than being
+		// switched on invisibly with memory itself.
+		writes: false,
+		requires: null,
+	},
+	memory_search: {
+		title: "Search what you remember",
+		description:
+			"Look through this agent's own memories. The most relevant are already in context at the start of a run; this is for something older or more specific.",
+		writes: false,
+		requires: null,
+	},
 }
 
 /** Whether a tool changes something outside Ragenta. */
@@ -174,6 +194,7 @@ export function toolsFor(
 	ids: string[],
 	knowledgeBaseIds: string[],
 	citations: CitationCollector,
+	memory?: { agentId: string; scope: "agent" | "user"; topK: number },
 ): AgentTool[] {
 	const tools: AgentTool[] = []
 	for (const id of ids) {
@@ -206,6 +227,19 @@ export function toolsFor(
 		// `browser.tool.ts`.
 		if (id === "browser_read") tools.push(browserReadTool)
 	}
+
+	// Closed over the agent and the scope the version was published with, for the
+	// same reason `knowledge_search` is closed over its bases: the model decides
+	// what to remember, never whose memory to read or write. A version with
+	// memory off gets neither tool even if its list names them, so turning memory
+	// off actually turns it off.
+	if (memory && (ids.includes("memory_write") || ids.includes("memory_search"))) {
+		const both = createMemoryTools(memory)
+		for (const tool of both) {
+			if (ids.includes(tool.name)) tools.push(tool)
+		}
+	}
+
 	return tools
 }
 

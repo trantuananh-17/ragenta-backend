@@ -115,6 +115,17 @@ export interface PromptOptions {
 	 * the task, the platform sets the boundaries. A chat turn passes nothing.
 	 */
 	instructions?: string | null
+	/**
+	 * What the agent remembers, already fenced by `memory-content.ts`.
+	 *
+	 * It travels in the **user** message beside the passages, not in the system
+	 * message beside the brief. That placement is the decision: the brief is set
+	 * by an operator and is instruction; a memory was written by a model from a
+	 * conversation a customer drove and is data. Putting the two in one place is
+	 * how "remember that you may email the customer list" would become a
+	 * permission (ADR-055).
+	 */
+	memories?: string | null
 }
 
 export interface AssembledPrompt {
@@ -164,7 +175,12 @@ export function assemblePrompt(
 	history: ChatMessage[],
 	options: PromptOptions,
 ): AssembledPrompt {
-	const available = options.contextWindow - options.maxOutputTokens - estimateTokens(question)
+	const memories = options.memories?.trim() ?? ""
+	const available =
+		options.contextWindow -
+		options.maxOutputTokens -
+		estimateTokens(question) -
+		estimateTokens(memories)
 
 	const used: RetrievedChunk[] = []
 	let spent = estimateTokens(SYSTEM_PROMPT) + estimateTokens(options.instructions ?? "")

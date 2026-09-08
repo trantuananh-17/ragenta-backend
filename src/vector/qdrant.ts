@@ -44,6 +44,17 @@ function getClient(): QdrantClient {
 	return client
 }
 
+/**
+ * The shared client, for the other collections in this directory.
+ *
+ * Exported rather than duplicated: one place decides whether the store is
+ * configured at all, and one place holds the connection. `memory-vectors.ts` is
+ * a separate *collection*, not a separate deployment.
+ */
+export function getVectorClient(): QdrantClient {
+	return getClient()
+}
+
 export function isVectorStoreConfigured(): boolean {
 	return env.qdrant !== undefined
 }

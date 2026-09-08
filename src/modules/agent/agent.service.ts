@@ -108,6 +108,9 @@ async function versionValues(
 		tools: config.tools,
 		maxRounds: config.maxRounds,
 		creditCeiling: config.creditCeiling?.toFixed(4) ?? null,
+		memoryEnabled: config.memoryEnabled,
+		memoryScope: config.memoryScope,
+		memoryTopK: config.memoryTopK,
 		createdBy: actorId,
 	}
 }
