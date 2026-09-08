@@ -5,6 +5,7 @@ import type { CitationCollector } from "../citations"
 import { apiCallTool } from "./api-call.tool"
 import { browserReadTool } from "./browser.tool"
 import { excelReadTool, excelWriteTool } from "./excel.tool"
+import { GOOGLE_TOOLS } from "./google.tool"
 import { httpRequestTool } from "./http-request.tool"
 import { imageOcrTool } from "./image-ocr.tool"
 import { imageVisionTool } from "./image-vision.tool"
@@ -69,6 +70,10 @@ export function toolsFor(
 		// check, and what that guard does not cover is written out in
 		// `browser.tool.ts`.
 		if (id === "browser_read") tools.push(browserReadTool)
+		// The connected Google account is resolved from the workspace, never named
+		// by the model — the same rule the knowledge bases follow.
+		const google = GOOGLE_TOOLS.find((tool) => tool.name === id)
+		if (google) tools.push(google)
 	}
 
 	// Closed over the agent and the scope the version was published with, for the
