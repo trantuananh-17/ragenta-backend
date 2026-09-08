@@ -169,6 +169,13 @@
       "when": 1788875944017,
       "tag": "0023_kind_sugar_man",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788876941502,
+      "tag": "0024_conscious_shape",
+      "breakpoints": true
     }
   ]
 }

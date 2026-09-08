@@ -16,6 +16,7 @@ import { connectionRoutes } from "../modules/integration/connection.routes"
 import { knowledgeRoutes } from "../modules/knowledge/knowledge.routes"
 import { planRoutes } from "../modules/billing/plan.routes"
 import { webhookRoutes } from "../modules/billing/webhook.routes"
+import { publicApiRoutes } from "../modules/apikey/public.routes"
 import { oauthCallbackRoutes } from "../modules/oauth/oauth.routes"
 import { hookRoutes } from "../modules/trigger/trigger.routes"
 import { modelRoutes } from "../modules/model/model.routes"
@@ -147,6 +148,8 @@ export function createApp() {
 	app.route("/v1/workspaces", speechRoutes)
 	app.route("/v1/workspaces", agentRoutes)
 	app.route("/v1/workspaces", connectionRoutes)
+	// The developer API: authenticated by an API key, deliberately small.
+	app.route("/v1/api", publicApiRoutes)
 	// The provider redirects a browser here; the workspace comes from the state.
 	app.route("/v1/oauth", oauthCallbackRoutes)
 	app.route("/v1/admin", adminRoutes)

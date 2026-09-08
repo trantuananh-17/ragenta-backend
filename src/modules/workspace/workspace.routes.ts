@@ -4,6 +4,7 @@ import { requireAuth } from "../../api/middleware/session"
 import { requirePermission } from "../../api/middleware/require-permission"
 import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
+import { apiKeyController } from "../apikey/apikey.controller"
 import { mcpController } from "../mcp/mcp.controller"
 import { rbacController } from "../rbac/rbac.controller"
 import { workspaceController } from "./workspace.controller"
@@ -143,4 +144,27 @@ workspaceRoutes.post(
 	workspaceScope,
 	requirePermission("mcpServer.manage"),
 	mcpController.checkForWorkspace,
+)
+
+/**
+ * API keys. Managed by a person with a session — deliberately never by a key,
+ * so a leaked key cannot mint itself a longer-lived one or widen its own reach.
+ */
+workspaceRoutes.get(
+	"/:workspaceId/api-keys",
+	workspaceScope,
+	requirePermission("apiKey.read"),
+	apiKeyController.list,
+)
+workspaceRoutes.post(
+	"/:workspaceId/api-keys",
+	workspaceScope,
+	requirePermission("apiKey.create"),
+	apiKeyController.create,
+)
+workspaceRoutes.delete(
+	"/:workspaceId/api-keys/:keyId",
+	workspaceScope,
+	requirePermission("apiKey.revoke"),
+	apiKeyController.revoke,
 )

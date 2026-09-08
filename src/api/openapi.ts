@@ -4,6 +4,7 @@ import { z } from "zod"
 import { auth } from "../auth/auth"
 import { env } from "../config/env"
 import { adjustCreditsSchema, adminListQuerySchema, setPlanSchema } from "../modules/admin/admin.dto"
+import { createApiKeySchema } from "../modules/apikey/apikey.dto"
 import {
 	agentConfigSchema,
 	createAgentSchema,
@@ -977,6 +978,44 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary: "Accounts this workspace has connected",
 		tags: ["Agents"],
 		access: "oauthConnection.read",
+	},
+	"GET /v1/workspaces/:workspaceId/api-keys": {
+		summary: "The workspace's API keys and when each was last used",
+		tags: ["Workspaces"],
+		access: "apiKey.read",
+	},
+	"POST /v1/workspaces/:workspaceId/api-keys": {
+		summary: "Create an API key. The key itself is in this response and no other",
+		tags: ["Workspaces"],
+		access: "apiKey.create",
+		body: createApiKeySchema,
+		status: 201,
+	},
+	"DELETE /v1/workspaces/:workspaceId/api-keys/:keyId": {
+		summary: "Revoke an API key. The row is kept so the audit trail still points somewhere",
+		tags: ["Workspaces"],
+		access: "apiKey.revoke",
+		status: 204,
+	},
+	"POST /v1/api/workspaces/:workspaceId/agents/:agentId/runs": {
+		summary: "Queue an agent run. Authenticated by an API key, not a session",
+		tags: ["Developer API"],
+		access: "an API key holding agent.run",
+	},
+	"GET /v1/api/workspaces/:workspaceId/agents": {
+		summary: "List agents, for a program",
+		tags: ["Developer API"],
+		access: "an API key holding agent.read",
+	},
+	"GET /v1/api/workspaces/:workspaceId/agent-runs/:runId": {
+		summary: "How a queued run is getting on",
+		tags: ["Developer API"],
+		access: "an API key holding agentRun.read",
+	},
+	"GET /v1/api/workspaces/:workspaceId/agent-runs/:runId/steps": {
+		summary: "What a run actually did, step by step",
+		tags: ["Developer API"],
+		access: "an API key holding agentRun.read",
 	},
 	"POST /v1/workspaces/:workspaceId/oauth-connections/:provider/start": {
 		summary: "Begin connecting an account. Returns the URL to send the browser to",
