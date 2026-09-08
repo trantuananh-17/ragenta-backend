@@ -24,6 +24,7 @@ import { TOOL_CATALOGUE, TOOL_IDS, isToolId } from "./tools"
 import type { ToolId } from "./tools"
 import type { AgentConfigInput, CreateAgentInput, CreateFromTemplateInput, RunAgentInput, UpdateAgentInput } from "./agent.dto"
 import { clearStop, requestStop } from "./stop-signal"
+import { diffVersions } from "./version-diff"
 
 /**
  * Turns a validated configuration into the columns of a new immutable version.
@@ -380,6 +381,105 @@ export const agentService = {
 		const existing = await agentRepository.findById(workspaceId, agentId)
 		if (!existing) throw new NotFoundError("Agent")
 		return agentRepository.listVersions(agentId)
+	},
+
+	/**
+	 * What changed between two versions.
+	 *
+	 * The history has been immutable since ADR-029 and unreadable ever since —
+	 * "version 7 started hallucinating" is unanswerable when the only thing on
+	 * screen is a list of numbers, and the answer is nearly always one field
+	 * somebody changed without thinking of it as a change.
+	 */
+	async diffVersions(workspaceId: string, agentId: string, from: number, to: number) {
+		const existing = await agentRepository.findById(workspaceId, agentId)
+		if (!existing) throw new NotFoundError("Agent")
+
+		const [before, after] = await Promise.all([
+			agentRepository.findVersion(agentId, from),
+			agentRepository.findVersion(agentId, to),
+		])
+		if (!before || !after) throw new NotFoundError("Agent version")
+
+		return {
+			from: { version: before.version, createdAt: before.createdAt },
+			to: { version: after.version, createdAt: after.createdAt },
+			changes: diffVersions(
+				before as unknown as Record<string, unknown>,
+				after as unknown as Record<string, unknown>,
+			),
+		}
+	},
+
+	/**
+	 * Goes back to an earlier version by **publishing it again**, not by moving a
+	 * pointer.
+	 *
+	 * A rollback that repointed `currentVersion` at version 3 would make the run
+	 * history ambiguous — two stretches of runs recorded against one version row,
+	 * with nothing to say which stretch a given run belonged to. Publishing a copy
+	 * keeps the invariant the whole feature rests on: a version is written once,
+	 * and the numbers only ever go up.
+	 */
+	async restoreVersion(
+		workspaceId: string,
+		agentId: string,
+		version: number,
+		actorId: string,
+	) {
+		const existing = await agentRepository.findById(workspaceId, agentId)
+		if (!existing) throw new NotFoundError("Agent")
+		if (version === existing.currentVersion) {
+			throw new ValidationError("That version is already the current one.")
+		}
+
+		const source = await agentRepository.findVersion(agentId, version)
+		if (!source) throw new NotFoundError("Agent version")
+
+		const created = await agentService.publishVersion(
+			workspaceId,
+			agentId,
+			agentConfigSchema.parse({
+				instructions: source.instructions,
+				model:
+					source.provider && source.model
+						? { provider: source.provider, model: source.model }
+						: null,
+				temperature: source.temperature === null ? null : Number(source.temperature),
+				maxOutputTokens: source.maxOutputTokens,
+				knowledgeBaseIds: source.knowledgeBaseIds,
+				searchMode: source.searchMode,
+				topK: source.topK,
+				similarityThreshold:
+					source.similarityThreshold === null ? null : Number(source.similarityThreshold),
+				vectorWeight: source.vectorWeight === null ? null : Number(source.vectorWeight),
+				rerank:
+					source.rerankProvider && source.rerankModel
+						? { provider: source.rerankProvider, model: source.rerankModel }
+						: null,
+				groundedOnly: source.groundedOnly,
+				tools: source.tools,
+				maxRounds: source.maxRounds,
+				creditCeiling: source.creditCeiling === null ? null : Number(source.creditCeiling),
+				graph: source.graph,
+				approveWrites: source.approveWrites,
+				memoryEnabled: source.memoryEnabled,
+				memoryScope: source.memoryScope,
+				memoryTopK: source.memoryTopK,
+			}),
+			actorId,
+		)
+
+		await auditService.record({
+			action: "agent.version_restored",
+			actorId,
+			organizationId: workspaceId,
+			targetType: "agent",
+			targetId: agentId,
+			metadata: { restored: version, publishedAs: created?.version },
+		})
+
+		return { version: created, restoredFrom: version }
 	},
 
 	async remove(workspaceId: string, agentId: string, actorId: string) {

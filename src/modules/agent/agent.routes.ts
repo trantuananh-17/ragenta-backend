@@ -82,11 +82,27 @@ agentRoutes.get(
 	requireResourcePermission("agent.read", "agent", "agentId"),
 	agentController.listVersions,
 )
+agentRoutes.get(
+	"/:workspaceId/agents/:agentId/versions/diff",
+	workspaceScope,
+	requireResourcePermission("agent.read", "agent", "agentId"),
+	agentController.diffVersions,
+)
 agentRoutes.post(
 	"/:workspaceId/agents/:agentId/versions",
 	workspaceScope,
 	requireResourcePermission("agent.publish", "agent", "agentId"),
 	agentController.publishVersion,
+)
+/**
+ * Going back is publishing, not repointing — so it needs the same permission
+ * publishing does, and it writes a new version rather than moving a pointer.
+ */
+agentRoutes.post(
+	"/:workspaceId/agents/:agentId/versions/:version/restore",
+	workspaceScope,
+	requireResourcePermission("agent.publish", "agent", "agentId"),
+	agentController.restoreVersion,
 )
 agentRoutes.get(
 	"/:workspaceId/agents/:agentId/runs",
