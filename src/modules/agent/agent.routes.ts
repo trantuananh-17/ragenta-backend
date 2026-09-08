@@ -3,6 +3,7 @@ import { Hono } from "hono"
 import { rateLimit } from "../../api/middleware/rate-limit"
 import { requireAuth } from "../../api/middleware/session"
 import { requirePermission } from "../../api/middleware/require-permission"
+import { requireResourcePermission } from "../../api/middleware/require-resource-permission"
 import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
 import { agentController } from "./agent.controller"
@@ -41,42 +42,53 @@ agentRoutes.post(
 	requirePermission("agent.create"),
 	agentController.create,
 )
-agentRoutes.get("/:workspaceId/agents/:agentId", workspaceScope, agentController.get)
+agentRoutes.get(
+	"/:workspaceId/agents/:agentId",
+	workspaceScope,
+	requireResourcePermission("agent.read", "agent", "agentId"),
+	agentController.get,
+)
 agentRoutes.patch(
 	"/:workspaceId/agents/:agentId",
 	workspaceScope,
-	requirePermission("agent.update"),
+	requireResourcePermission("agent.update", "agent", "agentId"),
 	agentController.update,
 )
 agentRoutes.delete(
 	"/:workspaceId/agents/:agentId",
 	workspaceScope,
-	requirePermission("agent.delete"),
+	requireResourcePermission("agent.delete", "agent", "agentId"),
 	agentController.remove,
 )
 agentRoutes.get(
 	"/:workspaceId/agents/:agentId/versions",
 	workspaceScope,
+	requireResourcePermission("agent.read", "agent", "agentId"),
 	agentController.listVersions,
 )
 agentRoutes.post(
 	"/:workspaceId/agents/:agentId/versions",
 	workspaceScope,
-	requirePermission("agent.publish"),
+	requireResourcePermission("agent.publish", "agent", "agentId"),
 	agentController.publishVersion,
 )
-agentRoutes.get("/:workspaceId/agents/:agentId/runs", workspaceScope, agentController.listRuns)
+agentRoutes.get(
+	"/:workspaceId/agents/:agentId/runs",
+	workspaceScope,
+	requireResourcePermission("agent.read", "agent", "agentId"),
+	agentController.listRuns,
+)
 agentRoutes.post(
 	"/:workspaceId/agents/:agentId/runs",
 	workspaceScope,
-	requirePermission("agent.run"),
+	requireResourcePermission("agent.run", "agent", "agentId"),
 	starting,
 	agentController.run,
 )
 agentRoutes.post(
 	"/:workspaceId/agents/:agentId/runs/queue",
 	workspaceScope,
-	requirePermission("agent.run"),
+	requireResourcePermission("agent.run", "agent", "agentId"),
 	starting,
 	agentController.queueRun,
 )

@@ -2,6 +2,7 @@ import { Hono } from "hono"
 
 import { requireAuth } from "../../api/middleware/session"
 import { requirePermission } from "../../api/middleware/require-permission"
+import { requireResourcePermission } from "../../api/middleware/require-resource-permission"
 import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
 import { projectController } from "./project.controller"
@@ -29,29 +30,30 @@ projectRoutes.post(
 projectRoutes.get(
 	"/:workspaceId/projects/:projectId",
 	workspaceScope,
+	requireResourcePermission("project.read", "project", "projectId"),
 	projectController.get,
 )
 projectRoutes.patch(
 	"/:workspaceId/projects/:projectId",
 	workspaceScope,
-	requirePermission("project.update"),
+	requireResourcePermission("project.update", "project", "projectId"),
 	projectController.update,
 )
 projectRoutes.post(
 	"/:workspaceId/projects/:projectId/archive",
 	workspaceScope,
-	requirePermission("project.archive"),
+	requireResourcePermission("project.archive", "project", "projectId"),
 	projectController.archive,
 )
 projectRoutes.post(
 	"/:workspaceId/projects/:projectId/restore",
 	workspaceScope,
-	requirePermission("project.archive"),
+	requireResourcePermission("project.archive", "project", "projectId"),
 	projectController.restore,
 )
 projectRoutes.delete(
 	"/:workspaceId/projects/:projectId",
 	workspaceScope,
-	requirePermission("project.delete"),
+	requireResourcePermission("project.delete", "project", "projectId"),
 	projectController.remove,
 )

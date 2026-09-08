@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm"
+import { and, eq, inArray, or } from "drizzle-orm"
 
 import { db } from "../../db/client"
 import type { DbExecutor } from "../../db/client"
@@ -6,10 +6,13 @@ import {
 	member,
 	memberRole,
 	permission,
+	resourceGrant,
 	role,
 	rolePermission,
 	userPlatformRole,
 } from "../../db/schema"
+
+import type { GrantEffect } from "./grant-decision"
 
 export type RoleRow = typeof role.$inferSelect
 export type PermissionRow = typeof permission.$inferSelect
@@ -63,6 +66,56 @@ export const rbacRepository = {
 	async findMemberById(memberId: string, executor: DbExecutor = db) {
 		const rows = await executor.select().from(member).where(eq(member.id, memberId)).limit(1)
 		return rows[0]
+	},
+
+	/** The role ids a membership holds, for composing the subject set of a grant lookup. */
+	async listMemberRoleIds(memberId: string, executor: DbExecutor = db): Promise<string[]> {
+		const rows = await executor
+			.select({ roleId: memberRole.roleId })
+			.from(memberRole)
+			.where(eq(memberRole.memberId, memberId))
+		return rows.map((row) => row.roleId)
+	},
+
+	/**
+	 * Every grant on one resource that applies to this membership — written
+	 * against the person, or against a role they hold.
+	 *
+	 * The workspace id is in the statement, not applied afterwards: a grant is
+	 * addressed by a polymorphic `resource_id` that carries no foreign key, so the
+	 * tenant filter is the only thing keeping one workspace's grant from being read
+	 * for another's resource of the same id.
+	 */
+	async listGrantsForResource(
+		workspaceId: string,
+		memberId: string,
+		roleIds: string[],
+		resourceType: string,
+		resourceId: string,
+		permissionKey: string,
+		executor: DbExecutor = db,
+	): Promise<GrantEffect[]> {
+		const subject = roleIds.length
+			? or(
+					and(eq(resourceGrant.subjectType, "member"), eq(resourceGrant.subjectId, memberId)),
+					and(eq(resourceGrant.subjectType, "role"), inArray(resourceGrant.subjectId, roleIds)),
+				)
+			: and(eq(resourceGrant.subjectType, "member"), eq(resourceGrant.subjectId, memberId))
+
+		const rows = await executor
+			.select({ effect: resourceGrant.effect })
+			.from(resourceGrant)
+			.where(
+				and(
+					eq(resourceGrant.organizationId, workspaceId),
+					eq(resourceGrant.resourceType, resourceType),
+					eq(resourceGrant.resourceId, resourceId),
+					eq(resourceGrant.permissionKey, permissionKey),
+					subject,
+				),
+			)
+
+		return rows.map((row) => (row.effect === "deny" ? "deny" : "allow"))
 	},
 
 	/**

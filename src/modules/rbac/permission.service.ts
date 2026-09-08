@@ -1,8 +1,13 @@
-import type { PlatformPermissionKey, WorkspacePermissionKey } from "../../auth/permissions"
+import type {
+	GrantableResourceType,
+	PlatformPermissionKey,
+	WorkspacePermissionKey,
+} from "../../auth/permissions"
 import { getRedis } from "../../redis/client"
 import { ForbiddenError } from "../../shared/errors"
 import { logger } from "../../shared/logger"
 import type { MembershipRow } from "../workspace/workspace.repository"
+import { decideResourcePermission } from "./grant-decision"
 import { primarySystemRoleId } from "./primary-role"
 import { rbacRepository } from "./rbac.repository"
 
@@ -175,6 +180,46 @@ export const permissionService = {
 	async syncFromBetterAuthRole(memberId: string, roleString: string): Promise<void> {
 		await rbacRepository.replaceMemberRoles(memberId, [primarySystemRoleId(roleString)], null)
 		await permissionService.invalidateMember(memberId)
+	},
+
+	/**
+	 * The same question, asked about one resource.
+	 *
+	 * A workspace-wide permission is the starting point and a grant on the
+	 * resource can widen or narrow it; `grant-decision.ts` holds the rule and the
+	 * reason deny wins. Callers pass the resource the *repository already fetched
+	 * and scoped* — this never re-checks tenancy, because a grant's `resource_id`
+	 * is polymorphic and proves nothing about which workspace owns the row.
+	 */
+	async memberHasOnResource(
+		membership: MembershipRow,
+		key: WorkspacePermissionKey,
+		resource: { type: GrantableResourceType; id: string },
+	): Promise<boolean> {
+		const [held, roleIds] = await Promise.all([
+			permissionService.forMember(membership.id),
+			rbacRepository.listMemberRoleIds(membership.id),
+		])
+
+		const effects = await rbacRepository.listGrantsForResource(
+			membership.organizationId,
+			membership.id,
+			roleIds,
+			resource.type,
+			resource.id,
+			key,
+		)
+
+		return decideResourcePermission(held.has(key), effects)
+	},
+
+	async assertMemberOnResource(
+		membership: MembershipRow,
+		key: WorkspacePermissionKey,
+		resource: { type: GrantableResourceType; id: string },
+	): Promise<void> {
+		if (await permissionService.memberHasOnResource(membership, key, resource)) return
+		throw new ForbiddenError(`This action requires the ${key} permission on this resource.`)
 	},
 
 	/**
