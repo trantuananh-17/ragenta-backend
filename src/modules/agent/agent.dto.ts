@@ -80,6 +80,20 @@ export const agentConfigSchema = z.object({
 	memoryTopK: z.number().int().min(1).max(20).default(5),
 })
 
+/**
+ * Starting from a template. The brief, the tools and the settings come from the
+ * template, so the only choices left are the ones only this workspace can make:
+ * what to call it, which documents it answers from, and which project pays.
+ */
+export const createFromTemplateSchema = z.object({
+	templateId: z.string().trim().min(1).max(64),
+	name: z.string().trim().min(1).max(120).optional(),
+	projectId: z.string().min(1).nullable().default(null),
+	knowledgeBaseIds: z.array(z.string().min(1)).max(10).default([]),
+})
+
+export type CreateFromTemplateInput = z.infer<typeof createFromTemplateSchema>
+
 export const createAgentSchema = z.object({
 	name: z.string().trim().min(1).max(120),
 	description: z.string().trim().max(500).nullable().default(null),

@@ -7,6 +7,7 @@ import { adjustCreditsSchema, adminListQuerySchema, setPlanSchema } from "../mod
 import {
 	agentConfigSchema,
 	createAgentSchema,
+	createFromTemplateSchema,
 	resumeRunSchema,
 	runAgentSchema,
 	updateAgentSchema,
@@ -922,6 +923,18 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary: "The MCP tools an agent version may name",
 		tags: ["Agents"],
 		access: "mcpServer.read",
+	},
+	"GET /v1/workspaces/:workspaceId/agent-templates": {
+		summary: "Agents you can start from, with each one's tools marked available or not",
+		tags: ["Agents"],
+		access: "any member",
+	},
+	"POST /v1/workspaces/:workspaceId/agents/from-template": {
+		summary: "Create an agent from a template",
+		tags: ["Agents"],
+		access: "agent.create",
+		body: createFromTemplateSchema,
+		status: 201,
 	},
 	"PUT /v1/workspaces/:workspaceId/mcp-servers": {
 		summary: "Add or change an MCP server this workspace owns",

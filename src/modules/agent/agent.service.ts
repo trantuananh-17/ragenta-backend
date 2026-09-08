@@ -17,13 +17,12 @@ import { agentRepository } from "./agent.repository"
 import { RETRYABLE_STATUSES, nextSeq, readCheckpoint } from "./checkpoint"
 import { validateGraph } from "./graph/types"
 import { isMcpToolId, mcpService } from "../mcp/mcp.service"
+import { integrationService } from "../integration/integration.service"
+import { agentConfigSchema } from "./agent.dto"
+import { AGENT_TEMPLATES, findTemplate } from "./templates"
 import { TOOL_CATALOGUE, TOOL_IDS, isToolId } from "./tools"
-import type {
-	AgentConfigInput,
-	CreateAgentInput,
-	RunAgentInput,
-	UpdateAgentInput,
-} from "./agent.dto"
+import type { ToolId } from "./tools"
+import type { AgentConfigInput, CreateAgentInput, CreateFromTemplateInput, RunAgentInput, UpdateAgentInput } from "./agent.dto"
 import { clearStop, requestStop } from "./stop-signal"
 
 /**
@@ -132,6 +131,100 @@ export const agentService = {
 	 */
 	tools() {
 		return TOOL_IDS.map((id) => ({ id, ...TOOL_CATALOGUE[id] }))
+	},
+
+	/**
+	 * The templates somebody can start an agent from, with each one's tools marked
+	 * available or not on *this* deployment.
+	 *
+	 * A template asking for `web_search` on a deployment with no search connection
+	 * is not an error — it is a template that will produce a slightly smaller
+	 * agent, and the screen should say which part it cannot have rather than
+	 * offering something that fails on its first run (ADR-057).
+	 */
+	async listTemplates(workspaceId: string) {
+		const connections = await integrationService.list(workspaceId)
+		const usable = new Set(
+			connections.filter((row) => row.enabled).map((row) => row.name),
+		)
+
+		return AGENT_TEMPLATES.map((template) => ({
+			...template,
+			tools: template.tools.map((id) => {
+				const required = TOOL_CATALOGUE[id].requires
+				return {
+					id,
+					title: TOOL_CATALOGUE[id].title,
+					available: required === null || usable.has(required),
+					requires: required,
+				}
+			}),
+		}))
+	},
+
+	/**
+	 * Creates an agent from a template.
+	 *
+	 * Tools the deployment cannot run are **dropped and reported**, not refused:
+	 * a support agent without web search is still a support agent, and an error
+	 * telling somebody to go and configure Tavily before they can try anything is
+	 * a worse first five minutes. What is refused is a template that needs a
+	 * knowledge base with none given, because that one produces an agent whose
+	 * every answer is "I could not find anything".
+	 */
+	async createFromTemplate(
+		workspaceId: string,
+		input: CreateFromTemplateInput,
+		actorId: string,
+	) {
+		const template = findTemplate(input.templateId)
+		if (!template) throw new NotFoundError("Template")
+
+		if (template.needsKnowledgeBase && input.knowledgeBaseIds.length === 0) {
+			throw new ValidationError(
+				`${template.name} answers from documents, so it needs at least one knowledge base.`,
+			)
+		}
+
+		const connections = await integrationService.list(workspaceId)
+		const usable = new Set(connections.filter((row) => row.enabled).map((row) => row.name))
+
+		const kept: ToolId[] = []
+		const dropped: string[] = []
+		for (const id of template.tools) {
+			const required = TOOL_CATALOGUE[id].requires
+			if (required === null || usable.has(required)) kept.push(id)
+			else dropped.push(id)
+		}
+
+		// A template that asks for the search tool and is given no base would be
+		// refused at publish time; drop it rather than fail, for the same reason
+		// the connection-backed tools are dropped.
+		const tools =
+			input.knowledgeBaseIds.length === 0
+				? kept.filter((id) => id !== "knowledge_search")
+				: kept
+
+		const agent = await agentService.create(
+			workspaceId,
+			{
+				name: input.name ?? template.name,
+				description: template.summary,
+				projectId: input.projectId,
+				config: agentConfigSchema.parse({
+					instructions: template.instructions,
+					knowledgeBaseIds: input.knowledgeBaseIds,
+					tools,
+					maxRounds: template.maxRounds,
+					groundedOnly: template.groundedOnly,
+					memoryEnabled: template.memory.enabled,
+					memoryScope: template.memory.scope,
+				}),
+			},
+			actorId,
+		)
+
+		return { agent, droppedTools: dropped, template: template.id }
 	},
 
 	/** Narrowed to the agents this caller may read, page and total together (ADR-054). */

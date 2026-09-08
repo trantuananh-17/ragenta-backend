@@ -36,6 +36,20 @@ const starting = rateLimit({
 
 agentRoutes.get("/:workspaceId/agent-tools", workspaceScope, agentController.listTools)
 agentRoutes.get("/:workspaceId/agents", workspaceScope, agentController.list)
+
+// Starting points, and creating an agent from one. Reading the list is open to
+// any member for the same reason the tool list is: it describes the build.
+agentRoutes.get(
+	"/:workspaceId/agent-templates",
+	workspaceScope,
+	agentController.listTemplates,
+)
+agentRoutes.post(
+	"/:workspaceId/agents/from-template",
+	workspaceScope,
+	requirePermission("agent.create"),
+	agentController.createFromTemplate,
+)
 agentRoutes.post(
 	"/:workspaceId/agents",
 	workspaceScope,
