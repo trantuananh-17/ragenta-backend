@@ -23,6 +23,7 @@ import { knowledgeRepository } from "./knowledge.repository"
 import { resolveParserConfig, runParser } from "./parsers"
 import type { ParsedChunk, ResolvedParserConfig } from "./parsers"
 import { buildRaptorTree, summaryPrompt } from "./raptor"
+import { webhookService } from "../webhook/webhook.service"
 
 const log = logger.child({ module: "ingestion" })
 
@@ -255,6 +256,13 @@ export const ingestionService = {
 				reused: plan.length - pending.length,
 				chunks: keys.length,
 				written: produced,
+			})
+
+			await webhookService.emit(row.organizationId, "document.ingested", {
+				documentId,
+				knowledgeBaseId: row.knowledgeBaseId,
+				name: row.name,
+				chunks: keys.length,
 			})
 
 			return { documentId, status: STATUS.ready, chunks: keys.length }
@@ -703,6 +711,21 @@ export const ingestionService = {
 			progressMessage: "Indexing failed",
 			...(startedAt ? { processDurationMs: Date.now() - startedAt } : {}),
 		})
+
+		// Re-read rather than threaded through: `fail` is reached from several
+		// places, and every one of them would otherwise have to carry a workspace
+		// id it does not currently need. `emit` never throws, so a subscriber's
+		// problem cannot stop a document being marked failed (ADR-067).
+		const row = await knowledgeRepository.findDocumentById(documentId)
+		if (row) {
+			await webhookService.emit(row.organizationId, "document.failed", {
+				documentId,
+				knowledgeBaseId: row.knowledgeBaseId,
+				name: row.name,
+				error: message.slice(0, 500),
+			})
+		}
+
 		return { documentId, status: STATUS.failed, error: message }
 	},
 

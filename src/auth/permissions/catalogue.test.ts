@@ -192,6 +192,11 @@ const LEGACY_ROUTE_GATES: ReadonlyArray<readonly [PermissionKey, readonly Worksp
 	["oauthConnection.manage", ["owner", "admin"]],
 	["mcpServer.read", ["owner", "admin", "member", "viewer"]],
 	["mcpServer.manage", ["owner", "admin"]],
+	// New in phase 17b, and deliberately **not** an ordinary read: the list names
+	// the URLs this workspace posts its own data to and how each endpoint has been
+	// failing. That is the audit log's audience, not a member's.
+	["webhook.read", ["owner", "admin"]],
+	["webhook.manage", ["owner", "admin"]],
 
 	["billing.read", ["owner", "admin", "member", "viewer"]],
 	["transaction.read", ["owner", "admin"]],

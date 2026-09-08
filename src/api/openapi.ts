@@ -32,6 +32,7 @@ import {
 	saveQuerySchema,
 } from "../modules/datasource/datasource.dto"
 import { saveMcpServerSchema } from "../modules/mcp/mcp.dto"
+import { saveWebhookEndpointSchema } from "../modules/webhook/webhook.dto"
 import { saveOAuthClientSchema, startOAuthSchema } from "../modules/oauth/oauth.dto"
 import { updateModelSettingsSchema } from "../modules/model/model.dto"
 import {
@@ -907,6 +908,40 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		tags: ["Admin"],
 		access: "admin.errors.read",
 		query: platformUsageQuerySchema,
+	},
+	"GET /v1/workspaces/:workspaceId/webhooks": {
+		summary: "Where this workspace is told about things, and the event catalogue",
+		tags: ["Workspaces"],
+		access: "webhook.read",
+	},
+	"POST /v1/workspaces/:workspaceId/webhooks": {
+		summary: "Add an endpoint. Its signing secret is shown once",
+		tags: ["Workspaces"],
+		access: "webhook.manage",
+		body: saveWebhookEndpointSchema,
+		status: 201,
+	},
+	"PUT /v1/workspaces/:workspaceId/webhooks/:endpointId": {
+		summary: "Change an endpoint's name, URL or subscriptions",
+		tags: ["Workspaces"],
+		access: "webhook.manage",
+		body: saveWebhookEndpointSchema,
+	},
+	"POST /v1/workspaces/:workspaceId/webhooks/:endpointId/rotate-secret": {
+		summary: "Issue a new signing secret, shown once. The old one stops working",
+		tags: ["Workspaces"],
+		access: "webhook.manage",
+	},
+	"DELETE /v1/workspaces/:workspaceId/webhooks/:endpointId": {
+		summary: "Remove an endpoint",
+		tags: ["Workspaces"],
+		access: "webhook.manage",
+		status: 204,
+	},
+	"GET /v1/workspaces/:workspaceId/webhook-deliveries": {
+		summary: "Every attempt to deliver an event, whether it worked or not",
+		tags: ["Workspaces"],
+		access: "webhook.read",
 	},
 	"GET /v1/workspaces/:workspaceId/provider-errors": {
 		summary: "This workspace's own failed provider calls",

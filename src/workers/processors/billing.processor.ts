@@ -56,7 +56,10 @@ export async function processBillingJob(job: Job) {
 		// Housekeeping, on this queue because it blocks nothing — see
 		// `jobs/maintenance.jobs.ts`.
 		case JOB_PRUNE_PROVIDER_ERRORS:
-			return retentionService.pruneProviderErrors()
+			return {
+				providerErrors: await retentionService.pruneProviderErrors(),
+				webhookDeliveries: await retentionService.pruneWebhookDeliveries(),
+			}
 		default:
 			// An unknown name is a deploy mismatch, not a transient fault. Fail it
 			// outright rather than retrying five times against the same gap.

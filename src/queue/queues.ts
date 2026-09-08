@@ -22,11 +22,23 @@ export const QUEUE_INGESTION = "ingestion" as const
  * document somebody is waiting to search.
  */
 export const QUEUE_AGENT = "agent" as const
+/**
+ * Outbound webhook deliveries.
+ *
+ * Its own queue for the reason the others have theirs — what a job here blocks
+ * on. A delivery waits on somebody else's server, which may be slow, down, or
+ * deliberately holding the connection open; a burst of them behind a dead
+ * endpoint must not sit in front of a credit refill or an agent run. It is also
+ * the one queue whose jobs are *expected* to fail and retry, which would make a
+ * shared queue's backlog unreadable.
+ */
+export const QUEUE_WEBHOOK = "webhook" as const
 
 export type QueueName =
 	| typeof QUEUE_BILLING
 	| typeof QUEUE_INGESTION
 	| typeof QUEUE_AGENT
+	| typeof QUEUE_WEBHOOK
 
 /**
  * Defaults every job inherits. Explicit rather than relying on BullMQ's, because
