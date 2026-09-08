@@ -9,6 +9,7 @@ import {
 	loopNodeParams,
 	parseLoopItems,
 	parseWorkbookRows,
+	unfence,
 	plannedIterations,
 	sttNodeParams,
 	ttsNodeParams,
@@ -350,5 +351,49 @@ describe("parseWorkbookRows", () => {
 
 	it("refuses a JSON value that is not a list", () => {
 		expect(() => parseWorkbookRows('{"rows":[]}', "json")).toThrow(/not a single value/)
+	})
+})
+
+/**
+ * The failure that produced this: a run whose model answered with a valid JSON
+ * table wrapped in ```json, and a spreadsheet step that reported the data was
+ * not a JSON list. It was; three backticks were.
+ *
+ * Models fence structured output as a reflex, and no prompt makes that
+ * reliable — so the parser gives way rather than every flow author fighting
+ * the same argument alone.
+ */
+describe("unfence", () => {
+	it("takes the body of a labelled block", () => {
+		expect(unfence("```json\n[1,2]\n```")).toBe("[1,2]")
+	})
+
+	it("takes the body of an unlabelled block", () => {
+		expect(unfence("```\n[1,2]\n```")).toBe("[1,2]")
+	})
+
+	it("skips whatever the model said before the block", () => {
+		expect(unfence("Here are the rows:\n\n```json\n[1]\n```")).toBe("[1]")
+	})
+
+	it("leaves unfenced text alone", () => {
+		expect(unfence("  [1,2]  ")).toBe("[1,2]")
+	})
+
+	/* A stray backtick run is not a block, and swallowing text on one would be worse. */
+	it("leaves text carrying an unclosed fence alone", () => {
+		expect(unfence("```json still typing")).toBe("```json still typing")
+	})
+})
+
+describe("fenced output reaches the parsers", () => {
+	it("reads rows a model wrapped in a code block", () => {
+		const fenced = "```json\n[[\"A\",\"1\"]]\n```"
+		expect(parseWorkbookRows(fenced, "json")).toEqual([["A", "1"]])
+	})
+
+	it("reads loop items a model wrapped in a code block", () => {
+		const fenced = "```json\n[\"a\",\"b\"]\n```"
+		expect(parseLoopItems(fenced, "json")).toEqual(["a", "b"])
 	})
 })

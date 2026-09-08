@@ -150,6 +150,25 @@ export const loopNodeParams = z.object({
 export type LoopNodeParams = z.infer<typeof loopNodeParams>
 
 /**
+ * A fenced code block, which is how a model returns JSON whether or not it was
+ * asked to.
+ *
+ * Wrapping structured output in ```json is close to reflex for every model
+ * worth using, and no amount of "do not wrap it in a code block" in a prompt
+ * makes it reliable. Leaving that to the flow author means every one of them
+ * loses the same argument privately, and the failure they see is
+ * `JSON.parse` complaining about a backtick.
+ *
+ * The body of the first block wins, so a reply that explains itself before the
+ * data still parses. Text with no fence is returned untouched.
+ */
+const FENCED_BLOCK = new RegExp("```[ \\t]*[\\w-]*[ \\t]*\\r?\\n([\\s\\S]*?)```")
+
+export function unfence(text: string): string {
+	return (FENCED_BLOCK.exec(text)?.[1] ?? text).trim()
+}
+
+/**
  * Turns the resolved `items` text into the list the body runs over.
  *
  * Two formats and no third: a node's output is text, and text that holds a list
@@ -161,8 +180,10 @@ export type LoopNodeParams = z.infer<typeof loopNodeParams>
  * anybody asked for.
  */
 export function parseLoopItems(text: string, format: "lines" | "json"): string[] {
+	const body = unfence(text)
+
 	if (format === "lines") {
-		return text
+		return body
 			.split(/\r?\n/)
 			.map((line) => line.trim())
 			.filter((line) => line.length > 0)
@@ -170,7 +191,7 @@ export function parseLoopItems(text: string, format: "lines" | "json"): string[]
 
 	let parsed: unknown
 	try {
-		parsed = JSON.parse(text)
+		parsed = JSON.parse(body)
 	} catch {
 		throw new ValidationError("This flow's loop expected a JSON list and did not get one.")
 	}
@@ -249,8 +270,10 @@ export function carriedValues(metadata: Record<string, unknown> | undefined): Re
 const LINE_BREAK = /\r?\n/
 
 export function parseWorkbookRows(text: string, format: "json" | "lines"): string[][] {
+	const body = unfence(text)
+
 	if (format === "lines") {
-		return text
+		return body
 			.split(LINE_BREAK)
 			.map((line) => line.trim())
 			.filter((line) => line.length > 0)
@@ -259,9 +282,11 @@ export function parseWorkbookRows(text: string, format: "json" | "lines"): strin
 
 	let parsed: unknown
 	try {
-		parsed = JSON.parse(text)
+		parsed = JSON.parse(body)
 	} catch {
-		throw new ValidationError("This flow's spreadsheet step expected a JSON list of rows.")
+		throw new ValidationError(
+			"This flow's spreadsheet step expected a JSON list of rows and could not read one.",
+		)
 	}
 
 	if (!Array.isArray(parsed)) {
