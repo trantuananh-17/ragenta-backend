@@ -5,43 +5,19 @@ import {
 	isProviderConfigured,
 	listCatalogue,
 } from "../../ai/catalogue"
-import { modelKey } from "../../ai/models"
-import type { ModelCapability, ModelDefinition } from "../../ai/models"
+import type { ModelCapability } from "../../ai/models"
 import { EntitlementError, ValidationError } from "../../shared/errors"
 import { auditService } from "../audit/audit.service"
 import { billingService } from "../billing/billing.service"
-import { planLimits } from "../billing/plans"
-import type { PlanName } from "../billing/plans"
 import { projectRepository } from "../project/project.repository"
 import { providerService } from "../provider/provider.service"
-import type { PlanModelAccess } from "../provider/provider.service"
+import { planAllowsModel } from "./entitlement"
 import { modelRepository } from "./model.repository"
 import type { UpdateModelSettingsInput } from "./model.dto"
 
 export interface ModelSelection {
 	provider: string
 	model: string
-}
-
-/**
- * Whether a plan may run one model.
- *
- * Two rules, in order. An administrator who has listed models for this plan and
- * capability has said exactly what it may run, and that list wins. An empty list
- * is not "nothing" — it is "nothing has been said", and the tier rule in
- * `plans.ts` answers instead, which is what every deployment had before the
- * allowlist existed.
- */
-function planAllowsModel(
-	access: PlanModelAccess,
-	plan: PlanName,
-	definition: Pick<ModelDefinition, "provider" | "model" | "capability" | "tier">,
-): boolean {
-	const allowed = access[definition.capability].allowed
-	if (allowed.length > 0) {
-		return allowed.includes(modelKey(definition.provider, definition.model))
-	}
-	return planLimits(plan).modelTiers.includes(definition.tier)
 }
 
 /**

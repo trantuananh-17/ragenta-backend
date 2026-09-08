@@ -5,6 +5,7 @@ import { NotFoundError } from "../../shared/errors"
 import { logger } from "../../shared/logger"
 import { searchChunks } from "../../vector/qdrant"
 import { knowledgeRepository } from "../knowledge/knowledge.repository"
+import { fuse } from "./fusion"
 
 const log = logger.child({ module: "retrieval" })
 
@@ -113,19 +114,6 @@ export interface RetrievalOutcome {
 	rerankUsage: { provider: string; model: string; tokens: number; estimated: boolean } | null
 }
 
-/**
- * `ts_rank_cd` returns an unbounded positive number, and a cosine similarity is
- * in [0, 1]. Adding them directly would let one long document's lexical score
- * dominate the fusion, so the lexical scores are normalised against the best one
- * in this result set. That makes the term half a *ranking* signal rather than a
- * magnitude — which is all it is being asked for.
- */
-function normalise(scores: Map<string, number>): Map<string, number> {
-	const best = Math.max(...scores.values(), 0)
-	if (best <= 0) return new Map()
-	return new Map([...scores].map(([id, score]) => [id, score / best]))
-}
-
 export const retrievalService = {
 	async retrieve(options: RetrieveOptions): Promise<RetrievalOutcome> {
 		const empty: RetrievalOutcome = { chunks: [], rerankUsage: null }
@@ -231,33 +219,21 @@ export const retrievalService = {
 				: Promise.resolve([]),
 		])
 
-		const vectorScores = new Map(dense.map((hit) => [hit.chunkId, hit.score]))
-		const termScores = normalise(new Map(lexical.map((hit) => [hit.id, Number(hit.score)])))
-
-		const fused = new Map<string, { score: number; vector: number; term: number }>()
-		for (const chunkId of new Set([...vectorScores.keys(), ...termScores.keys()])) {
-			const vectorScore = vectorScores.get(chunkId) ?? 0
-			const termScore = termScores.get(chunkId) ?? 0
-			fused.set(chunkId, {
-				score: vectorScore * vectorWeight + termScore * termWeight,
-				vector: vectorScore,
-				term: termScore,
-			})
-		}
-
-		const ranked = [...fused.entries()]
-			.filter(([, scores]) => scores.score >= threshold)
-			.sort((a, b) => b[1].score - a[1].score)
+		const ranked = fuse(dense, lexical, {
+			vectorWeight,
+			similarityThreshold: threshold,
 			// Keep the whole candidate pool when a reranker will reorder it; the
 			// point of reranking is that fusion's order is not the final one.
-			.slice(0, rerankSelection ? candidateLimit : topK)
+			limit: rerankSelection ? candidateLimit : topK,
+		})
 
 		if (ranked.length === 0) {
 			log.debug("retrieval.empty", {
 				workspaceId: options.workspaceId,
 				knowledgeBaseIds: baseIds,
 				mode,
-				candidates: fused.size,
+				dense: dense.length,
+				lexical: lexical.length,
 				threshold,
 			})
 			return empty
@@ -268,18 +244,18 @@ export const retrievalService = {
 		// the ranking.
 		const rows = await knowledgeRepository.findChunksByIds(
 			options.workspaceId,
-			ranked.map(([chunkId]) => chunkId),
+			ranked.map((entry) => entry.chunkId),
 		)
 		const byId = new Map(rows.map((row) => [row.id, row]))
 
-		const candidates = ranked.flatMap<RetrievedChunk>(([chunkId, scores]) => {
-			const row = byId.get(chunkId)
+		const candidates = ranked.flatMap<RetrievedChunk>((scored) => {
+			const row = byId.get(scored.chunkId)
 			// A vector whose chunk row is gone: the document was deleted between the
 			// search and this read. Dropping it is right — there is nothing to cite.
 			if (!row) return []
 			return [
 				{
-					chunkId,
+					chunkId: scored.chunkId,
 					documentId: row.documentId,
 					documentName: row.documentName,
 					knowledgeBaseId: row.knowledgeBaseId,
@@ -289,9 +265,9 @@ export const retrievalService = {
 					level: row.level,
 					fromPage: row.fromPage,
 					toPage: row.toPage,
-					score: scores.score,
-					vectorScore: scores.vector,
-					termScore: scores.term,
+					score: scored.score,
+					vectorScore: scored.vectorScore,
+					termScore: scored.termScore,
 					rerankScore: null,
 				},
 			]
