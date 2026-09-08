@@ -50,6 +50,15 @@ export interface RunGraphOptions {
 	state?: GraphState | null
 	/** The run's input, reachable as `{{sys.input}}`. */
 	input: string
+	/**
+	 * The images the run carries, already checked against the workspace.
+	 *
+	 * Two shapes because two things are wanted, and building one from the other
+	 * inside a flow is not possible: `{{sys.attachment}}` is the first id, which
+	 * is what a flow looking at one picture needs, and `{{sys.attachments}}` is
+	 * every id one per line, which is the format `loop` already parses.
+	 */
+	attachmentIds?: string[]
 	isStopped?: () => Promise<boolean>
 }
 
@@ -80,6 +89,9 @@ export interface RunGraphOptions {
  * that leaves the body out, so the frontier never reaches it and cannot run it
  * again after the loop.
  */
+/** What `loop` splits on with `format: "lines"`, so the two agree by construction. */
+const NEWLINE = "\n"
+
 export async function* runGraph(
 	options: RunGraphOptions,
 ): AsyncGenerator<GraphEvent, void> {
@@ -89,7 +101,11 @@ export async function* runGraph(
 	const reached = new Set(options.state?.reached ?? [BEGIN_NODE])
 	const values: Record<string, Record<string, string>> = {
 		...(options.state?.values ?? {}),
-		sys: { input: options.input },
+		sys: {
+			input: options.input,
+			attachment: options.attachmentIds?.[0] ?? "",
+			attachments: (options.attachmentIds ?? []).join(NEWLINE),
+		},
 	}
 	context.values = values
 

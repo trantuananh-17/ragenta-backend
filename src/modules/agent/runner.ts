@@ -8,6 +8,9 @@ import { logger } from "../../shared/logger"
 import { billingService } from "../billing/billing.service"
 import { assemblePrompt } from "../chat/prompt"
 import type { Grounding } from "../chat/prompt"
+import { attachmentService } from "../attachment/attachment.service"
+import type { MessageAttachmentRow } from "../attachment/attachment.repository"
+import { getObject } from "../../storage/objects"
 import { knowledgeService } from "../knowledge/knowledge.service"
 import { modelService } from "../model/model.service"
 import { retrievalService } from "../retrieval/retrieval.service"
@@ -37,13 +40,29 @@ const log = logger.child({ module: "agent.runner" })
 
 /** What the run was asked to do, read back off its own row rather than a caller. */
 function runInput(run: AgentRunRow): RunAgentInput {
-	const stored = run.input as { input?: unknown; documentIds?: unknown }
+	const stored = run.input as {
+		input?: unknown
+		documentIds?: unknown
+		attachmentIds?: unknown
+	}
 	return {
 		input: typeof stored.input === "string" ? stored.input : "",
-		documentIds: Array.isArray(stored.documentIds)
-			? stored.documentIds.filter((id): id is string => typeof id === "string")
-			: undefined,
+		documentIds: stringList(stored.documentIds),
+		attachmentIds: stringList(stored.attachmentIds),
 	}
+}
+
+/**
+ * A list of ids off a stored JSON column, or nothing.
+ *
+ * The row is the only record of what a run was asked to do — a retry days later
+ * reads it back rather than the request that started it — so a value that is not
+ * a list of strings is dropped rather than coerced.
+ */
+function stringList(value: unknown): string[] | undefined {
+	if (!Array.isArray(value)) return undefined
+	const ids = value.filter((id): id is string => typeof id === "string")
+	return ids.length > 0 ? ids : undefined
 }
 
 /** The ceiling on what one model call can produce, when the version sets none. */
@@ -97,6 +116,14 @@ export interface PreparedRun {
 	checkpoint: RunCheckpoint | null
 	/** The answers a paused run was waiting for. Empty when nobody was asked. */
 	answers: Record<string, string>
+	/**
+	 * The images this run carries, resolved and checked at `check` rather than
+	 * where they are used. A flow reads their ids through `{{sys.attachments}}`;
+	 * a single-prompt agent sends their bytes to the model. Resolving once means
+	 * an id belonging to another workspace fails before the run starts, not
+	 * half-way through a node that has already been billed.
+	 */
+	attachments: MessageAttachmentRow[]
 	actorId: string | null
 }
 
@@ -168,7 +195,11 @@ export const agentRunner = {
 			// that never gets that far is visibly waiting rather than apparently
 			// executing in a process that has not touched it.
 			status: "pending",
-			input: { input: input.input, documentIds: input.documentIds ?? [] },
+			input: {
+				input: input.input,
+				documentIds: input.documentIds ?? [],
+				attachmentIds: input.attachmentIds ?? [],
+			},
 		})
 		if (!run) throw new ValidationError("The run could not be started.")
 
@@ -311,7 +342,81 @@ export const agentRunner = {
 			)
 		}
 
-		return { agent, version, run, client, selection, input, actorId, checkpoint: null, answers: {} }
+		const attachments = await this.resolveAttachments(workspaceId, input, !version.graph)
+
+		/*
+			A flow reaches a picture through its `vision` or `ocr` node, which calls
+			a tool and never puts bytes on the chat wire — so a text-only model
+			running a flow is fine, and refusing it here would take the feature away
+			from the shape it was built for. Only a single-prompt run sends the
+			image to the model itself, and only that needs a model that can see.
+
+			Both halves are checked, as chat checks them: the model has to be able
+			to read an image, and this deployment's adapter has to actually send
+			one. Either missing means the agent answers about a picture it never
+			received, fluently and billably, with nothing in the reply to say so.
+		*/
+		if (attachments.length > 0 && !version.graph) {
+			const definition = await findCatalogueModel(selection.provider, selection.model)
+			if (!definition?.vision || !client.supportsVision) {
+				throw new ValidationError(
+					`${selection.model} cannot read images. Choose a model that can, or run this agent without attachments.`,
+				)
+			}
+		}
+
+		return {
+			agent,
+			version,
+			run,
+			client,
+			selection,
+			input,
+			actorId,
+			checkpoint: null,
+			answers: {},
+			attachments,
+		}
+	},
+
+	/**
+	 * The files a run claims, checked before anything is charged.
+	 *
+	 * `findOrFail` is the workspace boundary: an id from another workspace is a
+	 * 404 here rather than somebody else's file reaching a prompt.
+	 *
+	 * **What may be attached depends on what will read it.** A single-prompt run
+	 * hands its files straight to the model, and the only thing a chat model
+	 * takes as bytes is a picture — so anything else there is refused, in the
+	 * words of the file rather than of the type system. A flow reads a file
+	 * through a node instead: `excel` opens a workbook, `ocr` and `vision` open
+	 * an image, `stt` opens a recording. Restricting a flow to images would rule
+	 * out the spreadsheet case the `excel` node exists for.
+	 */
+	async resolveAttachments(
+		workspaceId: string,
+		input: RunAgentInput,
+		imagesOnly: boolean,
+	): Promise<MessageAttachmentRow[]> {
+		const ids = [...new Set(input.attachmentIds ?? [])]
+		if (ids.length === 0) return []
+
+		const rows = await Promise.all(
+			ids.map((id) => attachmentService.findOrFail(workspaceId, id)),
+		)
+
+		for (const row of rows) {
+			if (imagesOnly && row.kind !== "image") {
+				throw new ValidationError(
+					`"${row.fileName}" is not an image. This agent sends what it is given straight to the model, which can only read pictures — a flow can open other files with a step.`,
+				)
+			}
+			if (row.status !== "ready") {
+				throw new ValidationError(`"${row.fileName}" has not finished uploading.`)
+			}
+		}
+
+		return rows
 	},
 
 	/**
@@ -569,6 +674,7 @@ export const agentRunner = {
 					context,
 					state: resumed,
 					input: prepared.input.input,
+					attachmentIds: prepared.attachments.map((row) => row.id),
 					isStopped: stopCheck,
 				})) {
 					if (event.type === "delta") {
@@ -750,7 +856,7 @@ export const agentRunner = {
 		}
 
 		let messages = searchesItself
-			? this.openingMessages(prepared, version.instructions)
+			? await this.openingMessages(prepared, version.instructions)
 			: context.messages
 
 		const tools = toolsFor(version.tools, version.knowledgeBaseIds, hooks.citations)
@@ -936,15 +1042,52 @@ ${event.call.arguments.slice(0, 800)}`,
 		}
 	},
 
+	/**
+	 * Puts the run's images on the message the model reads as the question.
+	 *
+	 * The bytes travel inline rather than as a link, for the reason `ImagePart`
+	 * records: object storage binds to localhost on the VM, so a URL Ragenta can
+	 * sign is a URL no provider can fetch.
+	 *
+	 * A picture that cannot be read fails the run. This is the opposite of what
+	 * chat does with an *old* image, and deliberately: chat can drop one because
+	 * the thread continues and the question is the new text, whereas an agent run
+	 * carrying an image is a run **about** that image, and answering without it
+	 * would be answering a different question at full price.
+	 */
+	async attachImages(
+		messages: ChatMessage[],
+		attachments: MessageAttachmentRow[],
+	): Promise<ChatMessage[]> {
+		if (attachments.length === 0) return messages
+
+		const images = await Promise.all(
+			attachments.map(async (row) => ({
+				mediaType: row.mimeType,
+				dataBase64: (await getObject(row.storageKey)).toString("base64"),
+			})),
+		)
+
+		// The last user message, not the first: `assemblePrompt` puts retrieved
+		// passages in earlier turns, and the images belong to the question.
+		const question = [...messages].reverse().find((message) => message.role === "user")
+		if (question) question.images = images
+
+		return messages
+	},
+
 	/** The opening exchange for an agent that will search for itself. */
-	openingMessages(prepared: PreparedRun, instructions: string): ChatMessage[] {
+	async openingMessages(
+		prepared: PreparedRun,
+		instructions: string,
+	): Promise<ChatMessage[]> {
 		const { messages } = assemblePrompt(prepared.input.input, [], [], {
 			contextWindow: FALLBACK_CONTEXT_WINDOW,
 			maxOutputTokens: prepared.version.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
 			grounding: "tools",
 			instructions,
 		})
-		return messages
+		return this.attachImages(messages, prepared.attachments)
 	},
 
 	/**
@@ -1021,6 +1164,10 @@ ${event.call.arguments.slice(0, 800)}`,
 
 		citations.add(used)
 
-		return { messages, missing, rerank }
+		return {
+			messages: await this.attachImages(messages, prepared.attachments),
+			missing,
+			rerank,
+		}
 	},
 }

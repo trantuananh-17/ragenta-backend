@@ -93,6 +93,13 @@ export const runAgentSchema = z.object({
 	 * Empty means every document in them.
 	 */
 	documentIds: z.array(z.string().min(1)).max(50).optional(),
+	/**
+	 * Images this run is about, uploaded through the same endpoint a chat message
+	 * uses. Ten because a run is not a conversation: the whole set is one
+	 * question, and a flow that wants more should read them from a spreadsheet
+	 * rather than carry them on the request.
+	 */
+	attachmentIds: z.array(z.string().min(1)).max(10).optional(),
 })
 
 /** The answers a paused flow was waiting for, keyed by the field it asked for. */
