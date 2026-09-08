@@ -173,6 +173,12 @@ export interface ListedModel {
 	embeddingPerMillion: number
 	contextWindow?: number
 	embeddingDimensions?: number
+	/**
+	 * Whether the model reads images, where the provider's own listing says so.
+	 * Left unset when it does not publish the fact — which is not the same as
+	 * publishing that it cannot, and is why the column it lands in is nullable.
+	 */
+	vision?: boolean
 }
 
 export interface ProviderClient {

@@ -77,6 +77,13 @@ export const openrouterClient: ProviderClient = {
 					outputPerMillion,
 					embeddingPerMillion: 0,
 					contextWindow: entry.context_length,
+					// The same field that says what comes out says what may go in,
+					// and it is the only trustworthy answer available: OpenRouter
+					// proxies hundreds of models under vendor-namespaced ids, so
+					// reading vision off the name would be guessing. Getting it
+					// wrong here is what produced "No endpoints found that support
+					// image input" from the router rather than from us.
+					vision: (entry.architecture?.input_modalities ?? []).includes("image"),
 				},
 			]
 		}).slice(0, MAX_IMPORTED)

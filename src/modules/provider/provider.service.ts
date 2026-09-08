@@ -110,6 +110,12 @@ export const providerService = {
 							tier: entry.tier,
 							contextWindow: entry.contextWindow ?? null,
 							embeddingDimensions: entry.embeddingDimensions ?? null,
+							// The resolved answer, not the row's three-state one: a
+							// console shows a checkbox, and "unstated" is not a
+							// state a checkbox can be in. Serialised as a boolean
+							// rather than left undefined, because a key JSON drops
+							// is a key a client schema rejects the payload over.
+							vision: entry.vision === true,
 							rates: entry.rates,
 							enabled: entry.enabled,
 							custom: entry.custom,
@@ -220,6 +226,7 @@ export const providerService = {
 				outputPerMillion: model.outputPerMillion.toFixed(6),
 				embeddingPerMillion: model.embeddingPerMillion.toFixed(6),
 				embeddingDimensions: model.embeddingDimensions ?? null,
+				vision: model.vision ?? null,
 				enabled: true,
 				createdBy: actorId,
 			})
@@ -338,6 +345,7 @@ export const providerService = {
 			outputPerMillion: input.outputPerMillion.toFixed(6),
 			embeddingPerMillion: input.embeddingPerMillion.toFixed(6),
 			embeddingDimensions: input.embeddingDimensions,
+			vision: input.vision,
 			enabled: input.enabled,
 			createdBy: actorId,
 		})
@@ -363,6 +371,18 @@ export const providerService = {
 		const current = await findCatalogueModel(provider, model)
 		if (!current) throw new NotFoundError("Model")
 
+		/*
+			Vision comes off the raw row rather than the merged model, and only
+			this field does. Everything else resolves the same way whichever it
+			reads, but vision has a third state: the row saying nothing and the
+			compiled definition answering instead. Carrying the *merged* value
+			forward would pin a built-in at whatever `src/ai/models.ts` happens to
+			say today; carrying nothing forward would take vision away from every
+			imported model the moment somebody toggled it off and on again.
+		*/
+		const rows = await providerRepository.listModels()
+		const stored = rows.find((row) => row.provider === provider && row.model === model)
+
 		return this.upsertModel(
 			{
 				provider,
@@ -375,6 +395,7 @@ export const providerService = {
 				embeddingPerMillion: patch.embeddingPerMillion ?? current.rates.embedding,
 				embeddingDimensions:
 					patch.embeddingDimensions ?? current.embeddingDimensions ?? null,
+				vision: patch.vision !== undefined ? patch.vision : (stored?.vision ?? null),
 				enabled: patch.enabled ?? current.enabled,
 			},
 			actorId,

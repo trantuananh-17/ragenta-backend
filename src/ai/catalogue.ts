@@ -67,7 +67,9 @@ async function load(): Promise<Snapshot> {
 	)
 
 	for (const row of rows) {
-		byKey.set(modelKey(row.provider, row.model), {
+		const key = modelKey(row.provider, row.model)
+		const builtIn = byKey.get(key)
+		byKey.set(key, {
 			provider: row.provider,
 			model: row.model,
 			capability: row.capability as ModelCapability,
@@ -78,11 +80,16 @@ async function load(): Promise<Snapshot> {
 				embedding: Number(row.embeddingPerMillion),
 			},
 			contextWindow: row.contextWindow ?? undefined,
-			// No `vision` here because `provider_model` has no such column yet, so a
-			// row leaves the flag unset and images are not offered for that model.
-			// That is the safe direction: the alternative is sending an image to a
-			// model that cannot read it and billing a workspace for an answer
-			// written from the text alone.
+			/*
+				A row replaces the built-in entry rather than merging with it, so a
+				row that says nothing about vision has to fall back or every
+				administrator who toggled a built-in model off and on again would
+				have silently taken its images away — the model still reads them,
+				and the send is refused saying it cannot. An imported model has no
+				built-in to fall back to, so it resolves to false until the import
+				or an administrator says otherwise.
+			*/
+			vision: row.vision ?? builtIn?.vision,
 			embeddingDimensions: row.embeddingDimensions ?? undefined,
 			custom: true,
 			enabled: row.enabled,

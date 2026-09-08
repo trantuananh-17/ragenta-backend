@@ -91,6 +91,23 @@ export const providerModel = pgTable(
 		 * of the two.
 		 */
 		embeddingDimensions: integer("embedding_dimensions"),
+		/**
+		 * Whether the model reads images in a user message.
+		 *
+		 * A column rather than something inferred from the model id: a provider
+		 * names its models however it likes, and guessing wrong in the permissive
+		 * direction means a workspace is billed for an answer written from the
+		 * caption alone, about a picture the model never received.
+		 *
+		 * Nullable, and that is the whole point of it. A row here *replaces* the
+		 * compiled definition rather than merging with it, so a column defaulting
+		 * to false would silently strip vision from every built-in the moment an
+		 * administrator toggled it off and on again. NULL means this row states
+		 * nothing about vision and `src/ai/models.ts` still answers; false means
+		 * somebody said no. Where there is no compiled entry — every imported
+		 * model — NULL resolves to false, which is the safe direction.
+		 */
+		vision: boolean("vision"),
 		/** Off hides it from every picker without losing its rates. */
 		enabled: boolean("enabled").default(true).notNull(),
 		createdAt: timestamp("created_at").defaultNow().notNull(),

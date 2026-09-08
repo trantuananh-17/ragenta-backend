@@ -28,6 +28,15 @@ export const upsertModelSchema = z.object({
 	embeddingPerMillion: rateSchema.default(0),
 	/** Required for an embedding model: it selects the vector collection. */
 	embeddingDimensions: z.number().int().positive().max(16_384).nullable().default(null),
+	/**
+	 * Whether this model reads images.
+	 *
+	 * Null rather than false when unstated: for a built-in model that is what
+	 * lets `src/ai/models.ts` keep answering, and for one added by hand it
+	 * resolves to false anyway. Guessing the permissive way instead would bill a
+	 * workspace for an answer about a picture the model never received.
+	 */
+	vision: z.boolean().nullable().default(null),
 	enabled: z.boolean().default(true),
 })
 
