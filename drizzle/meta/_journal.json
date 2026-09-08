@@ -134,6 +134,13 @@
       "when": 1788859330443,
       "tag": "0018_spooky_pepper_potts",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1788868367112,
+      "tag": "0019_mature_scourge",
+      "breakpoints": true
     }
   ]
 }
