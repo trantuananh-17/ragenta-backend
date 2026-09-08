@@ -2,6 +2,7 @@ import type { Job } from "bullmq"
 
 import { autoReloadService } from "../../modules/billing/autoreload.service"
 import { billingService } from "../../modules/billing/billing.service"
+import { retentionService } from "../../modules/observability/retention.service"
 import { logger } from "../../shared/logger"
 import {
 	JOB_REFILL_PLAN_CREDITS,
@@ -10,6 +11,7 @@ import {
 	enqueueRefillPlanCredits,
 	refillPlanCreditsPayload,
 } from "../../jobs/billing.jobs"
+import { JOB_PRUNE_PROVIDER_ERRORS } from "../../jobs/maintenance.jobs"
 
 const log = logger.child({ processor: "billing" })
 
@@ -51,6 +53,10 @@ export async function processBillingJob(job: Job) {
 		// overlaps the previous one cannot double-bill a card.
 		case JOB_SCAN_AUTO_RELOAD:
 			return autoReloadService.runScan()
+		// Housekeeping, on this queue because it blocks nothing — see
+		// `jobs/maintenance.jobs.ts`.
+		case JOB_PRUNE_PROVIDER_ERRORS:
+			return retentionService.pruneProviderErrors()
 		default:
 			// An unknown name is a deploy mismatch, not a transient fault. Fail it
 			// outright rather than retrying five times against the same gap.

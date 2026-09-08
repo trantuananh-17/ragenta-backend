@@ -2,6 +2,7 @@ import { Worker } from "bullmq"
 import type { Job } from "bullmq"
 
 import { JOB_SCAN_AUTO_RELOAD, JOB_SCAN_PLAN_REFILLS } from "../jobs/billing.jobs"
+import { JOB_PRUNE_PROVIDER_ERRORS } from "../jobs/maintenance.jobs"
 import { JOB_SCAN_TRIGGERS } from "../jobs/trigger.jobs"
 import { QUEUE_AGENT, QUEUE_BILLING, QUEUE_INGESTION, getQueue } from "../queue/queues"
 import { createRedisConnection } from "../redis/client"
@@ -109,6 +110,14 @@ export async function registerSchedules(): Promise<void> {
 		JOB_SCAN_AUTO_RELOAD,
 		{},
 		{ repeat: { pattern: "*/5 * * * *" }, jobId: JOB_SCAN_AUTO_RELOAD },
+	)
+
+	// Nightly, at an hour nothing else is scheduled on. Missing a night costs
+	// nothing: the next sweep deletes by age, not by what the last one left.
+	await queue.add(
+		JOB_PRUNE_PROVIDER_ERRORS,
+		{},
+		{ repeat: { pattern: "17 3 * * *" }, jobId: JOB_PRUNE_PROVIDER_ERRORS },
 	)
 
 	// Every minute, on the agent queue: a schedule cannot fire sooner than the

@@ -34,6 +34,17 @@ const envSchema = z.object({
 	 */
 	RATE_LIMIT_ENABLED: z.enum(["true", "false"]).default("true"),
 
+	/**
+	 * How long a recorded provider failure is kept.
+	 *
+	 * Configuration rather than a constant because the two environments want
+	 * different answers: staging is a scratchpad whose old failures are noise,
+	 * production is where somebody asks what happened last month. Zero disables
+	 * the sweep, which is the escape hatch for an incident nobody wants trimmed
+	 * out from under them while it is being investigated.
+	 */
+	PROVIDER_ERROR_RETENTION_DAYS: z.coerce.number().int().min(0).max(3_650).default(30),
+
 	DATABASE_URL: z.string().min(1),
 	REDIS_URL: z.string().min(1),
 
@@ -230,6 +241,8 @@ export const env = {
 	},
 
 	rateLimit: { enabled: raw.RATE_LIMIT_ENABLED === "true" },
+
+	observability: { providerErrorRetentionDays: raw.PROVIDER_ERROR_RETENTION_DAYS },
 
 	databaseUrl: raw.DATABASE_URL,
 	redisUrl: raw.REDIS_URL,
