@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lt, sql } from "drizzle-orm"
+import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm"
 
 import { db } from "../../db/client"
 import { providerError } from "../../db/schema"
@@ -86,5 +86,34 @@ export const errorLogService = {
 			.where(eq(providerError.organizationId, workspaceId))
 			.orderBy(desc(providerError.createdAt))
 			.limit(limit)
+	},
+
+	/**
+	 * Deletes failures older than the retention window, a bounded batch at a time.
+	 *
+	 * Bounded because the first sweep after this ships has years of rows behind it
+	 * on a busy deployment, and one unbounded `delete` would hold a lock over the
+	 * table the admin console reads. The sweep runs daily and simply takes several
+	 * days to catch up, which costs nothing — nobody is waiting on it.
+	 *
+	 * Zero days disables it entirely: the escape hatch for an incident nobody
+	 * wants trimmed out from under them mid-investigation.
+	 */
+	async pruneOlderThan(days: number, batch: number): Promise<number> {
+		if (days <= 0) return 0
+
+		const cutoff = new Date(Date.now() - days * 86_400_000)
+		const doomed = db
+			.select({ id: providerError.id })
+			.from(providerError)
+			.where(lt(providerError.createdAt, cutoff))
+			.limit(batch)
+
+		const deleted = await db
+			.delete(providerError)
+			.where(inArray(providerError.id, doomed))
+			.returning({ id: providerError.id })
+
+		return deleted.length
 	},
 }
