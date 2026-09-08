@@ -6,6 +6,7 @@ import { requirePermission } from "../../api/middleware/require-permission"
 import { requireResourcePermission } from "../../api/middleware/require-resource-permission"
 import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
+import { triggerController } from "../trigger/trigger.controller"
 import { agentController } from "./agent.controller"
 
 /**
@@ -127,4 +128,36 @@ agentRoutes.post(
 	requirePermission("agentRun.control"),
 	starting,
 	agentController.retryRun,
+)
+
+/**
+ * What starts a run when nobody is watching.
+ *
+ * Reading a trigger list is `agent.read` on that agent; creating or changing one
+ * is `agent.update`, because a trigger makes an agent spend money on a schedule
+ * somebody else set (ADR-058).
+ */
+agentRoutes.get(
+	"/:workspaceId/agents/:agentId/triggers",
+	workspaceScope,
+	requireResourcePermission("agent.read", "agent", "agentId"),
+	triggerController.list,
+)
+agentRoutes.post(
+	"/:workspaceId/agents/:agentId/triggers",
+	workspaceScope,
+	requireResourcePermission("agent.update", "agent", "agentId"),
+	triggerController.create,
+)
+agentRoutes.put(
+	"/:workspaceId/triggers/:triggerId",
+	workspaceScope,
+	requirePermission("agent.update"),
+	triggerController.update,
+)
+agentRoutes.delete(
+	"/:workspaceId/triggers/:triggerId",
+	workspaceScope,
+	requirePermission("agent.update"),
+	triggerController.remove,
 )

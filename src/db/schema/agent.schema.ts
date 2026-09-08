@@ -279,7 +279,10 @@ export const agentRun = pgTable(
 			"agentRun_status_check",
 			sql`${table.status} in ('pending', 'running', 'awaiting_input', 'succeeded', 'failed', 'stopped')`,
 		),
-		check("agentRun_trigger_check", sql`${table.trigger} in ('manual', 'api', 'schedule')`),
+		check(
+			"agentRun_trigger_check",
+			sql`${table.trigger} in ('manual', 'api', 'schedule', 'webhook')`,
+		),
 	],
 )
 

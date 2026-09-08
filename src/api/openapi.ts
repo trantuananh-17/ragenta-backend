@@ -51,6 +51,7 @@ import {
 	setRolesSchema,
 	updateRoleSchema,
 } from "../modules/rbac/rbac.dto"
+import { saveTriggerSchema } from "../modules/trigger/trigger.dto"
 import {
 	synthesizeSpeechSchema,
 	transcribeAttachmentSchema,
@@ -935,6 +936,36 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		access: "agent.create",
 		body: createFromTemplateSchema,
 		status: 201,
+	},
+	"GET /v1/workspaces/:workspaceId/agents/:agentId/triggers": {
+		summary: "What starts this agent when nobody is watching",
+		tags: ["Agents"],
+		access: "agent.read",
+	},
+	"POST /v1/workspaces/:workspaceId/agents/:agentId/triggers": {
+		summary: "Add a webhook or a schedule. A webhook's secret is shown once",
+		tags: ["Agents"],
+		access: "agent.update",
+		body: saveTriggerSchema,
+		status: 201,
+	},
+	"PUT /v1/workspaces/:workspaceId/triggers/:triggerId": {
+		summary: "Change a trigger",
+		tags: ["Agents"],
+		access: "agent.update",
+		body: saveTriggerSchema,
+	},
+	"DELETE /v1/workspaces/:workspaceId/triggers/:triggerId": {
+		summary: "Remove a trigger",
+		tags: ["Agents"],
+		access: "agent.update",
+		status: 204,
+	},
+	"POST /v1/hooks/:triggerId": {
+		summary: "Fire a webhook trigger. No session: the X-Ragenta-Secret header is the credential",
+		tags: ["Agents"],
+		access: "the webhook's own secret",
+		status: 202,
 	},
 	"PUT /v1/workspaces/:workspaceId/mcp-servers": {
 		summary: "Add or change an MCP server this workspace owns",

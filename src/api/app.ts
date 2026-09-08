@@ -16,6 +16,7 @@ import { connectionRoutes } from "../modules/integration/connection.routes"
 import { knowledgeRoutes } from "../modules/knowledge/knowledge.routes"
 import { planRoutes } from "../modules/billing/plan.routes"
 import { webhookRoutes } from "../modules/billing/webhook.routes"
+import { hookRoutes } from "../modules/trigger/trigger.routes"
 import { modelRoutes } from "../modules/model/model.routes"
 import { projectRoutes } from "../modules/project/project.routes"
 import { promoRoutes } from "../modules/promo/promo.routes"
@@ -124,6 +125,8 @@ export function createApp() {
 	// Before attachSession: the caller is Stripe, not a session, and the request
 	// is authenticated by its signature instead.
 	app.route("/v1/webhooks", webhookRoutes)
+	// Inbound webhooks that start an agent. Public by design — see hookRoutes.
+	app.route("/v1/hooks", hookRoutes)
 
 	// Registered before the module routers below, which is what makes it run for
 	// them: Hono applies middleware to handlers added after it.

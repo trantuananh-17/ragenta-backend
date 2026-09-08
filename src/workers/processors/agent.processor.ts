@@ -3,6 +3,8 @@ import type { Job } from "bullmq"
 import { agentRunner } from "../../modules/agent/runner"
 import { JOB_RUN_AGENT, runAgentPayload } from "../../queue/agent.jobs"
 import type { RunAgentPayload } from "../../queue/agent.jobs"
+import { JOB_SCAN_TRIGGERS } from "../../jobs/trigger.jobs"
+import { triggerService } from "../../modules/trigger/trigger.service"
 import { logger } from "../../shared/logger"
 
 const log = logger.child({ processor: "agent" })
@@ -44,8 +46,23 @@ async function runAgent(payload: RunAgentPayload) {
 	return { runId: payload.runId, status }
 }
 
+/**
+ * One pass over the schedules that are due.
+ *
+ * Every minute, and deliberately cheap when nothing is due: an indexed range
+ * query that returns no rows. Each due trigger is claimed before it is fired, so
+ * two workers scanning the same second produce one run rather than two.
+ */
+async function scanTriggers() {
+	const fired = await triggerService.fireDueSchedules()
+	if (fired > 0) log.info("trigger.scan.completed", { fired })
+	return { fired }
+}
+
 export async function processAgentJob(job: Job) {
 	switch (job.name) {
+		case JOB_SCAN_TRIGGERS:
+			return scanTriggers()
 		case JOB_RUN_AGENT:
 			return runAgent(runAgentPayload.parse(job.data))
 		default:
