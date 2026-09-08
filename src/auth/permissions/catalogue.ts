@@ -400,6 +400,21 @@ const WORKSPACE_PERMISSIONS = [
 	},
 
 	{
+		key: "mcpServer.read",
+		scope: "workspace",
+		resource: "mcpServer",
+		action: "read",
+		description: "See the MCP servers this workspace's agents may reach",
+	},
+	{
+		key: "mcpServer.manage",
+		scope: "workspace",
+		resource: "mcpServer",
+		action: "manage",
+		description: "Add, change and remove an MCP server and its stored key",
+	},
+
+	{
 		key: "billing.read",
 		scope: "workspace",
 		resource: "billing",
@@ -615,6 +630,21 @@ const PLATFORM_PERMISSIONS = [
 	},
 
 	{
+		key: "admin.mcp.read",
+		scope: "platform",
+		resource: "admin.mcp",
+		action: "read",
+		description: "See the MCP servers configured for the whole deployment",
+	},
+	{
+		key: "admin.mcp.manage",
+		scope: "platform",
+		resource: "admin.mcp",
+		action: "manage",
+		description: "Add, change and remove a deployment-wide MCP server",
+	},
+
+	{
 		key: "admin.role.read",
 		scope: "platform",
 		resource: "admin.role",
@@ -808,6 +838,7 @@ const PLATFORM_SYSTEM_ROLES = [
 			"admin.model.read",
 			"admin.speech.read",
 			"admin.integration.read",
+			"admin.mcp.read",
 			"admin.role.read",
 			"admin.audit.read",
 			"admin.setting.read",
@@ -845,6 +876,7 @@ const PLATFORM_SYSTEM_ROLES = [
 			"admin.model.read",
 			"admin.speech.read",
 			"admin.integration.read",
+			"admin.mcp.read",
 			"admin.role.read",
 			"admin.audit.read",
 			"admin.setting.read",

@@ -4,6 +4,7 @@ import { requireAuth } from "../../api/middleware/session"
 import { requirePermission } from "../../api/middleware/require-permission"
 import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
+import { mcpController } from "../mcp/mcp.controller"
 import { rbacController } from "../rbac/rbac.controller"
 import { workspaceController } from "./workspace.controller"
 
@@ -106,4 +107,40 @@ workspaceRoutes.put(
 	workspaceScope,
 	requirePermission("member.update"),
 	rbacController.setWorkspaceMemberRoles,
+)
+
+/**
+ * The MCP servers this workspace's agents may reach — the deployment's, plus its
+ * own. Managing one stores a credential, so it carries the same audience a
+ * connection does (ADR-056).
+ */
+workspaceRoutes.get(
+	"/:workspaceId/mcp-servers",
+	workspaceScope,
+	requirePermission("mcpServer.read"),
+	mcpController.listForWorkspace,
+)
+workspaceRoutes.get(
+	"/:workspaceId/mcp-tools",
+	workspaceScope,
+	requirePermission("mcpServer.read"),
+	mcpController.listTools,
+)
+workspaceRoutes.put(
+	"/:workspaceId/mcp-servers",
+	workspaceScope,
+	requirePermission("mcpServer.manage"),
+	mcpController.saveForWorkspace,
+)
+workspaceRoutes.delete(
+	"/:workspaceId/mcp-servers/:serverId",
+	workspaceScope,
+	requirePermission("mcpServer.manage"),
+	mcpController.removeForWorkspace,
+)
+workspaceRoutes.post(
+	"/:workspaceId/mcp-servers/:serverId/check",
+	workspaceScope,
+	requirePermission("mcpServer.manage"),
+	mcpController.checkForWorkspace,
 )

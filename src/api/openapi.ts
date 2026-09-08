@@ -23,6 +23,7 @@ import {
 	reindexDocumentSchema,
 	updateKnowledgeBaseSchema,
 } from "../modules/knowledge/knowledge.dto"
+import { saveMcpServerSchema } from "../modules/mcp/mcp.dto"
 import { updateModelSettingsSchema } from "../modules/model/model.dto"
 import {
 	patchModelSchema,
@@ -889,6 +890,55 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		tags: ["Admin"],
 		access: "admin.usage.read",
 		query: platformUsageQuerySchema,
+	},
+	"GET /v1/admin/mcp-servers": {
+		summary: "MCP servers configured for the whole deployment",
+		tags: ["Admin"],
+		access: "admin.mcp.read",
+	},
+	"PUT /v1/admin/mcp-servers": {
+		summary: "Add or change a deployment-wide MCP server",
+		tags: ["Admin"],
+		access: "admin.mcp.manage",
+		body: saveMcpServerSchema,
+	},
+	"DELETE /v1/admin/mcp-servers/:serverId": {
+		summary: "Remove a deployment-wide MCP server",
+		tags: ["Admin"],
+		access: "admin.mcp.manage",
+		status: 204,
+	},
+	"POST /v1/admin/mcp-servers/:serverId/check": {
+		summary: "Ask an MCP server what tools it offers, and record the outcome",
+		tags: ["Admin"],
+		access: "admin.mcp.manage",
+	},
+	"GET /v1/workspaces/:workspaceId/mcp-servers": {
+		summary: "MCP servers this workspace's agents may reach",
+		tags: ["Agents"],
+		access: "mcpServer.read",
+	},
+	"GET /v1/workspaces/:workspaceId/mcp-tools": {
+		summary: "The MCP tools an agent version may name",
+		tags: ["Agents"],
+		access: "mcpServer.read",
+	},
+	"PUT /v1/workspaces/:workspaceId/mcp-servers": {
+		summary: "Add or change an MCP server this workspace owns",
+		tags: ["Agents"],
+		access: "mcpServer.manage",
+		body: saveMcpServerSchema,
+	},
+	"DELETE /v1/workspaces/:workspaceId/mcp-servers/:serverId": {
+		summary: "Remove an MCP server this workspace owns",
+		tags: ["Agents"],
+		access: "mcpServer.manage",
+		status: 204,
+	},
+	"POST /v1/workspaces/:workspaceId/mcp-servers/:serverId/check": {
+		summary: "Ask this workspace's MCP server what tools it offers",
+		tags: ["Agents"],
+		access: "mcpServer.manage",
 	},
 
 	"GET /v1/workspaces/:workspaceId/billing/promo-codes": {

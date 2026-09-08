@@ -175,6 +175,10 @@ const LEGACY_ROUTE_GATES: ReadonlyArray<readonly [PermissionKey, readonly Worksp
 	["model.manage", ["owner", "admin"]],
 	["connection.read", ["owner", "admin", "member", "viewer"]],
 	["connection.manage", ["owner", "admin"]],
+	// New in phase 8, and given the same audience as a connection for the same
+	// reason: both hold a credential an agent acts through.
+	["mcpServer.read", ["owner", "admin", "member", "viewer"]],
+	["mcpServer.manage", ["owner", "admin"]],
 
 	["billing.read", ["owner", "admin", "member", "viewer"]],
 	["transaction.read", ["owner", "admin"]],

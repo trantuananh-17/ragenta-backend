@@ -15,6 +15,9 @@ import { sendEmailTool } from "./send-email.tool"
 import { speechSynthesizeTool } from "./speech-synthesize.tool"
 import { speechTranscribeTool } from "./speech-transcribe.tool"
 import { webSearchTool } from "./web-search.tool"
+import type { McpToolSummary } from "../../../db/schema/mcp.schema"
+import { isMcpToolId, mcpService, parseMcpToolId } from "../../mcp/mcp.service"
+import { createMcpTool } from "./mcp.tool"
 import type { AgentTool } from "./types"
 
 export type { AgentTool, ToolContext, ToolResult } from "./types"
@@ -254,9 +257,58 @@ export function toDefinition(tool: AgentTool): ToolDefinition {
 	return {
 		name: tool.name,
 		description: tool.description,
-		parameters: z.toJSONSchema(tool.parameters, {
-			io: "input",
-			unrepresentable: "any",
-		}) as Record<string, unknown>,
+		// A tool that brought its own schema keeps it; everything else derives one
+		// from what its arguments are validated against, so the two cannot drift.
+		parameters:
+			tool.jsonSchema ??
+			(z.toJSONSchema(tool.parameters, {
+				io: "input",
+				unrepresentable: "any",
+			}) as Record<string, unknown>),
 	}
+}
+
+/**
+ * The MCP tools one run may call, resolved from the version's tool list.
+ *
+ * Separate from `toolsFor` and asynchronous because discovery is a network call:
+ * a third-party server has to be asked what it offers, and the cached answer has
+ * to be refreshed. Keeping `toolsFor` synchronous means every built-in tool is
+ * still assembled without touching anything (ADR-056).
+ *
+ * A tool id naming a server this workspace cannot reach is **skipped**, not
+ * fatal. A version is an immutable record of what was configured; a server
+ * deleted after it was published should cost that agent one tool, not every run.
+ */
+export async function mcpToolsFor(
+	workspaceId: string,
+	ids: string[],
+	signal?: AbortSignal,
+): Promise<AgentTool[]> {
+	const wanted = ids.filter(isMcpToolId)
+	if (wanted.length === 0) return []
+
+	const tools: AgentTool[] = []
+	const listed = new Map<string, McpToolSummary[]>()
+
+	for (const id of wanted) {
+		const parsed = parseMcpToolId(id)
+		if (!parsed) continue
+
+		if (!listed.has(parsed.slug)) {
+			const server = await mcpService.findForWorkspace(workspaceId, parsed.slug)
+			listed.set(
+				parsed.slug,
+				server?.enabled ? await mcpService.toolsForRun(server, signal) : [],
+			)
+		}
+
+		const summary = listed.get(parsed.slug)?.find((tool) => tool.name === parsed.tool)
+		if (!summary) continue
+
+		const built = createMcpTool(id, summary)
+		if (built) tools.push(built)
+	}
+
+	return tools
 }

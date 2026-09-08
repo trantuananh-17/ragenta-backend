@@ -9,6 +9,7 @@ import type { AppEnv } from "../../api/types"
 import { promoController } from "../promo/promo.controller"
 import { integrationController } from "../integration/integration.controller"
 import { providerController } from "../provider/provider.controller"
+import { mcpController } from "../mcp/mcp.controller"
 import { rbacController } from "../rbac/rbac.controller"
 import { platformUsageController } from "../usage/usage.controller"
 import { adminController } from "./admin.controller"
@@ -269,4 +270,27 @@ adminRoutes.get(
 	"/usage/workspaces",
 	requirePlatformPermission("admin.usage.read"),
 	platformUsageController.byWorkspace,
+)
+
+// MCP servers every workspace may name. Deployment-wide like the model
+// providers, and for the same reason: the deployment owns the credential.
+adminRoutes.get(
+	"/mcp-servers",
+	requirePlatformPermission("admin.mcp.read"),
+	mcpController.listPlatform,
+)
+adminRoutes.put(
+	"/mcp-servers",
+	requirePlatformPermission("admin.mcp.manage"),
+	mcpController.savePlatform,
+)
+adminRoutes.delete(
+	"/mcp-servers/:serverId",
+	requirePlatformPermission("admin.mcp.manage"),
+	mcpController.removePlatform,
+)
+adminRoutes.post(
+	"/mcp-servers/:serverId/check",
+	requirePlatformPermission("admin.mcp.manage"),
+	mcpController.checkPlatform,
 )

@@ -16,6 +16,7 @@ import type { MembershipRow } from "../workspace/workspace.repository"
 import { agentRepository } from "./agent.repository"
 import { RETRYABLE_STATUSES, nextSeq, readCheckpoint } from "./checkpoint"
 import { validateGraph } from "./graph/types"
+import { isMcpToolId, mcpService } from "../mcp/mcp.service"
 import { TOOL_CATALOGUE, TOOL_IDS, isToolId } from "./tools"
 import type {
 	AgentConfigInput,
@@ -48,11 +49,19 @@ async function versionValues(
 		await resolveRerankModel(config.rerank.provider, config.rerank.model)
 	}
 
-	const unknown = config.tools.filter((id) => !isToolId(id))
+	const unknown = config.tools.filter((id) => !isToolId(id) && !isMcpToolId(id))
 	if (unknown.length > 0) {
 		throw new ValidationError(
 			`This deployment has no tool called ${unknown.map((id) => `"${id}"`).join(", ")}.`,
 		)
+	}
+
+	// An MCP tool is checked against the servers this workspace can actually
+	// reach, at publish time. A version naming a server nobody configured would
+	// otherwise publish cleanly and lose a tool at run time, where the reason is
+	// a log line rather than a message on the screen somebody is looking at.
+	for (const id of config.tools.filter(isMcpToolId)) {
+		await mcpService.assertToolAvailable(workspaceId, id)
 	}
 
 	if (config.tools.includes("knowledge_search") && config.knowledgeBaseIds.length === 0) {
