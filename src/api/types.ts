@@ -12,6 +12,15 @@ export interface AppVariables {
 	session?: AuthSession["session"]
 	/** Set by the workspace-scope middleware once membership is proven. */
 	membership?: MembershipRow
+	/**
+	 * Set when the caller is an API key rather than a person.
+	 *
+	 * `requirePermission` reads this **instead of** the membership's own set: a
+	 * key is a narrowing of what its creator may do, so checking the membership
+	 * would hand every key everything its author has (ADR-062).
+	 */
+	keyPermissions?: Set<string>
+	apiKeyId?: string
 }
 
 export type AppEnv = { Variables: AppVariables }

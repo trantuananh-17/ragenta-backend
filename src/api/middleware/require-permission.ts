@@ -18,13 +18,19 @@ import type { AppEnv } from "../types"
  * Naming several permissions requires **all** of them. There is no "any of"
  * variant, because no route needs one and an authorization helper that is
  * sometimes a disjunction is one somebody will eventually read as a conjunction.
+ *
+ * When the caller is an API key, the set checked is the key's own — already
+ * narrowed to what its creator still holds (ADR-062).
  */
 export function requirePermission(...required: WorkspacePermissionKey[]) {
 	return createMiddleware<AppEnv>(async (c, next) => {
 		const membership = c.get("membership")
 		if (!membership) throw new ForbiddenError()
 
-		const held = await permissionService.forMember(membership.id)
+		// A key's set is already the intersection of what it was given and what its
+		// membership still holds, computed when it was resolved. Falling back to the
+		// membership here would undo the narrowing the key exists to express.
+		const held = c.get("keyPermissions") ?? (await permissionService.forMember(membership.id))
 		const missing = required.filter((key) => !held.has(key))
 
 		if (missing.length > 0) {
