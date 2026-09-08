@@ -33,7 +33,7 @@ import {
 } from "../modules/datasource/datasource.dto"
 import { saveMcpServerSchema } from "../modules/mcp/mcp.dto"
 import { saveWebhookEndpointSchema } from "../modules/webhook/webhook.dto"
-import { versionDiffQuerySchema } from "../modules/agent/agent.dto"
+import { compareVersionsSchema, versionDiffQuerySchema } from "../modules/agent/agent.dto"
 import { saveOAuthClientSchema, startOAuthSchema } from "../modules/oauth/oauth.dto"
 import { updateModelSettingsSchema } from "../modules/model/model.dto"
 import {
@@ -980,6 +980,18 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary: "The MCP tools an agent version may name",
 		tags: ["Agents"],
 		access: "mcpServer.read",
+	},
+	"POST /v1/workspaces/:workspaceId/agents/:agentId/compare": {
+		summary: "Run one input against several versions. Queued, so it answers with run ids",
+		tags: ["Agents"],
+		access: "agent.run",
+		body: compareVersionsSchema,
+		status: 202,
+	},
+	"GET /v1/workspaces/:workspaceId/comparisons/:comparisonId": {
+		summary: "The runs of one comparison, each with the version number it ran",
+		tags: ["Agents"],
+		access: "agent.read",
 	},
 	"GET /v1/workspaces/:workspaceId/agents/:agentId/versions/diff": {
 		summary: "What changed between two versions of an agent",

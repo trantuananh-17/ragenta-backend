@@ -82,6 +82,22 @@ agentRoutes.get(
 	requireResourcePermission("agent.read", "agent", "agentId"),
 	agentController.listVersions,
 )
+/**
+ * Running one input against several versions. `agent.run` rather than
+ * `agent.read`: each version named is a real run that spends real credits.
+ */
+agentRoutes.post(
+	"/:workspaceId/agents/:agentId/compare",
+	workspaceScope,
+	requireResourcePermission("agent.run", "agent", "agentId"),
+	agentController.compareVersions,
+)
+agentRoutes.get(
+	"/:workspaceId/comparisons/:comparisonId",
+	workspaceScope,
+	requirePermission("agent.read"),
+	agentController.getComparison,
+)
 agentRoutes.get(
 	"/:workspaceId/agents/:agentId/versions/diff",
 	workspaceScope,

@@ -1,4 +1,4 @@
-import { and, count, desc, eq, sql } from "drizzle-orm"
+import { and, asc, count, desc, eq, sql } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
 
 import { db } from "../../db/client"
@@ -140,6 +140,24 @@ export const agentRepository = {
 			.where(and(eq(agentRun.organizationId, workspaceId), eq(agentRun.id, runId)))
 			.limit(1)
 		return rows[0]
+	},
+
+	/** The runs of one comparison, oldest first so the versions read in order. */
+	async listComparisonRuns(
+		workspaceId: string,
+		comparisonId: string,
+		executor: DbExecutor = db,
+	) {
+		return executor
+			.select()
+			.from(agentRun)
+			.where(
+				and(
+					eq(agentRun.organizationId, workspaceId),
+					eq(agentRun.comparisonId, comparisonId),
+				),
+			)
+			.orderBy(asc(agentRun.createdAt))
 	},
 
 	async listRuns(

@@ -6,6 +6,7 @@ import { isAppError } from "../../shared/errors"
 import { paginationQuerySchema } from "../../shared/pagination"
 import {
 	agentConfigSchema,
+	compareVersionsSchema,
 	createAgentSchema,
 	createFromTemplateSchema,
 	resumeRunSchema,
@@ -67,6 +68,31 @@ export const agentController = {
 		const membership = requireMembership(c)
 		return c.json(
 			await agentService.listVersions(membership.organizationId, requireParam(c, "agentId")),
+		)
+	},
+
+	async compareVersions(c: AppContext) {
+		const user = requireUser(c)
+		const membership = requireMembership(c)
+		const input = compareVersionsSchema.parse(await c.req.json())
+		return c.json(
+			await agentService.compareVersions(
+				membership.organizationId,
+				requireParam(c, "agentId"),
+				input,
+				user.id,
+			),
+			202,
+		)
+	},
+
+	async getComparison(c: AppContext) {
+		const membership = requireMembership(c)
+		return c.json(
+			await agentService.getComparison(
+				membership.organizationId,
+				requireParam(c, "comparisonId"),
+			),
 		)
 	},
 

@@ -22,7 +22,7 @@ import { agentConfigSchema } from "./agent.dto"
 import { AGENT_TEMPLATES, findTemplate } from "./templates"
 import { TOOL_CATALOGUE, TOOL_IDS, isToolId } from "./tools"
 import type { ToolId } from "./tools"
-import type { AgentConfigInput, CreateAgentInput, CreateFromTemplateInput, RunAgentInput, UpdateAgentInput } from "./agent.dto"
+import type { AgentConfigInput, CompareVersionsInput, CreateAgentInput, CreateFromTemplateInput, RunAgentInput, UpdateAgentInput } from "./agent.dto"
 import { clearStop, requestStop } from "./stop-signal"
 import { diffVersions } from "./version-diff"
 
@@ -480,6 +480,101 @@ export const agentService = {
 		})
 
 		return { version: created, restoredFrom: version }
+	},
+
+	/**
+	 * Runs one input against several versions and returns the runs it started.
+	 *
+	 * **Ordinary runs, queued the ordinary way.** A run already records the version
+	 * it ran (`agentVersionId`), and `pickUp` already reads that rather than the
+	 * agent's current version — so a comparison needed no execution path of its
+	 * own, only a way to create runs pointing at older versions. Everything that
+	 * makes a run readable afterwards is therefore free: the output, the credits,
+	 * the latency and the whole step trace.
+	 *
+	 * They are **queued rather than streamed** because there are several of them
+	 * and each may take minutes. The caller gets ids back immediately and watches
+	 * the runs it already knows how to display.
+	 *
+	 * Credits are checked per run by the runner, not up front here: a comparison
+	 * that could afford three of its four runs should produce three answers and one
+	 * recorded refusal, which is more useful than refusing the whole thing.
+	 */
+	async compareVersions(
+		workspaceId: string,
+		agentId: string,
+		input: CompareVersionsInput,
+		actorId: string,
+	) {
+		const agent = await agentRepository.findById(workspaceId, agentId)
+		if (!agent) throw new NotFoundError("Agent")
+
+		const unique = [...new Set(input.versions)]
+		if (unique.length < 2) {
+			throw new ValidationError("Name at least two different versions to compare.")
+		}
+
+		const versions = await Promise.all(
+			unique.map((number) => agentRepository.findVersion(agentId, number)),
+		)
+		const missing = unique.filter((_, index) => !versions[index])
+		if (missing.length > 0) {
+			throw new NotFoundError(`Agent version ${missing.join(", ")}`)
+		}
+
+		const comparisonId = newId()
+		const runs = []
+
+		for (const version of versions) {
+			if (!version) continue
+			const run = await agentRepository.insertRun({
+				id: newId(),
+				organizationId: workspaceId,
+				agentId: agent.id,
+				agentVersionId: version.id,
+				projectId: agent.projectId,
+				userId: actorId,
+				trigger: "comparison",
+				comparisonId,
+				status: "pending",
+				input: { input: input.input, documentIds: [], attachmentIds: [] },
+			})
+			if (!run) continue
+
+			await enqueueAgentRun({ workspaceId, runId: run.id }, 0)
+			runs.push({ runId: run.id, version: version.version })
+		}
+
+		await auditService.record({
+			action: "agent.versions_compared",
+			actorId,
+			organizationId: workspaceId,
+			targetType: "agent",
+			targetId: agentId,
+			metadata: { comparisonId, versions: unique },
+		})
+
+		return { comparisonId, runs }
+	},
+
+	async getComparison(workspaceId: string, comparisonId: string) {
+		const runs = await agentRepository.listComparisonRuns(workspaceId, comparisonId)
+		if (runs.length === 0) throw new NotFoundError("Comparison")
+
+		// The version *number* is what somebody is comparing, and the run carries
+		// only the version's id — so it is resolved here rather than leaving the
+		// screen to fetch every version to find out which run was which.
+		const versions = await Promise.all(
+			runs.map((run) => agentRepository.findVersionById(run.agentVersionId)),
+		)
+
+		return {
+			comparisonId,
+			runs: runs.map((run, index) => ({
+				...run,
+				version: versions[index]?.version ?? null,
+			})),
+		}
 	},
 
 	async remove(workspaceId: string, agentId: string, actorId: string) {
