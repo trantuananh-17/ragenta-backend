@@ -1,9 +1,11 @@
 import { z } from "zod"
 
 import { providerClient } from "../../ai/clients"
+import { env } from "../../config/env"
 import { requireCredential } from "../../ai/catalogue"
 import { introspect, runQuery } from "../../datasource/execute"
 import { maskDsn, parseDsn, scrubDsns } from "../../datasource/dsn"
+import { assertDsnHostAllowed } from "../../datasource/host-policy"
 import type { DataQueryParameter, DataSourceTable } from "../../db/schema/datasource.schema"
 import { ConflictError, NotFoundError, ValidationError } from "../../shared/errors"
 import { newId } from "../../shared/id"
@@ -57,6 +59,7 @@ export const datasourceService = {
 					"That connection string could not be read. It should look like postgres://user:password@host:5432/database.",
 				)
 			}
+			await assertDsnHostAllowed(input.dsn, env.datasource.allowPrivateHosts)
 			engine = parsed.engine
 			encryptedDsn = encryptSecret(input.dsn)
 			dsnHint = maskDsn(input.dsn)

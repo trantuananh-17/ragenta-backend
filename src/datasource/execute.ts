@@ -1,8 +1,10 @@
 import mysql from "mysql2/promise"
 import { Client } from "pg"
 
+import { env } from "../config/env"
 import { ValidationError } from "../shared/errors"
 import { scrubDsns } from "./dsn"
+import { assertDsnHostAllowed } from "./host-policy"
 import type { DataSourceTable } from "../db/schema/datasource.schema"
 
 /**
@@ -41,6 +43,11 @@ export async function runQuery(
 	parameters: unknown[],
 	rowLimit: number,
 ): Promise<QueryOutcome> {
+	// Checked here rather than only where a source is saved, so a row written
+	// before the policy existed, or a name that has since been repointed at a
+	// private address, is refused at the moment it would be dialled.
+	await assertDsnHostAllowed(dsn, env.datasource.allowPrivateHosts)
+
 	const limit = Math.min(Math.max(rowLimit, 1), MAX_ROWS_HARD_CAP)
 	const started = Date.now()
 

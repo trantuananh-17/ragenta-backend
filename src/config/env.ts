@@ -44,6 +44,9 @@ const envSchema = z.object({
 	 * out from under them while it is being investigated.
 	 */
 	PROVIDER_ERROR_RETENTION_DAYS: z.coerce.number().int().min(0).max(3_650).default(30),
+	// Off wherever more than one customer shares the deployment: it is what stops
+	// a workspace pointing a data source at Ragenta's own network.
+	DATASOURCE_ALLOW_PRIVATE_HOSTS: z.enum(["true", "false"]).default("false"),
 
 	DATABASE_URL: z.string().min(1),
 	REDIS_URL: z.string().min(1),
@@ -243,6 +246,8 @@ export const env = {
 	rateLimit: { enabled: raw.RATE_LIMIT_ENABLED === "true" },
 
 	observability: { providerErrorRetentionDays: raw.PROVIDER_ERROR_RETENTION_DAYS },
+
+	datasource: { allowPrivateHosts: raw.DATASOURCE_ALLOW_PRIVATE_HOSTS === "true" },
 
 	databaseUrl: raw.DATABASE_URL,
 	redisUrl: raw.REDIS_URL,

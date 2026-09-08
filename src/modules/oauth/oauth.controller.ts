@@ -76,7 +76,7 @@ export const oauthController = {
 
 	/** The console's own list, with the redirect URI to register at each provider. */
 	async listForAdmin(c: AppContext) {
-		return c.json({ providers: forAdmin(await oauthService.listProviders()) })
+		return c.json({ providers: forAdmin(await oauthService.listForAdmin()) })
 	},
 
 	async saveClient(c: AppContext) {
@@ -94,7 +94,7 @@ export const oauthController = {
  * without `redirectUri`, the console parses every reply with one schema, and a
  * save that had already been written reported "Could not save".
  */
-function forAdmin(providers: Awaited<ReturnType<typeof oauthService.listProviders>>) {
+function forAdmin(providers: Awaited<ReturnType<typeof oauthService.listForAdmin>>) {
 	return providers.map((provider) => ({
 		...provider,
 		redirectUri: oauthService.redirectUriFor(provider.id),
