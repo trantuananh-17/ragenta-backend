@@ -69,6 +69,28 @@ export const excelNodeParams = z.discriminatedUnion("operation", [
 	z.object({
 		operation: z.literal("write"),
 		fileName: z.string().trim().min(1).max(120).optional(),
+		/**
+		 * An uploaded .xlsx to fill in, rather than a blank workbook. Rows land
+		 * below what the sheet already holds; the template is never modified,
+		 * because a run that fills a form must not consume the blank one.
+		 */
+		templateAttachmentId: template.optional(),
+		/**
+		 * The rows, as one template resolving to a list.
+		 *
+		 * A grid typed at design time cannot express "one row per thing the run
+		 * found", which is what a flow writing a spreadsheet is nearly always for.
+		 * One template can: it resolves against the same values every other field
+		 * does, so `{{extract.text}}` producing a JSON array becomes as many rows
+		 * as the model wrote.
+		 *
+		 * Optional so a graph published against `sheets` keeps working; when it is
+		 * set it decides, because two sources for one thing means the one that
+		 * loses is the one somebody spends an afternoon on.
+		 */
+		rows: template.optional(),
+		rowsFormat: z.enum(["json", "lines"]).default("json"),
+		sheetName: z.string().trim().min(1).max(SHEET_NAME_CHARACTERS).default("Sheet1"),
 		sheets: z
 			.array(
 				z.object({
@@ -78,9 +100,25 @@ export const excelNodeParams = z.discriminatedUnion("operation", [
 				}),
 			)
 			.min(1)
-			.max(10),
+			.max(10)
+			.optional(),
 	}),
-])
+]).superRefine((params, ctx) => {
+	/*
+		Both row sources are optional so that a graph published against either one
+		keeps parsing, which leaves "neither" expressible — and a write with
+		nothing to write does not fail, it produces an empty workbook and a step
+		that looks like it worked. Making `sheets` optional is what opened this;
+		refusing it here is what closes it.
+	*/
+	if (params.operation === "write" && !params.rows && !params.sheets) {
+		ctx.addIssue({
+			code: "custom",
+			path: ["rows"],
+			message: "A spreadsheet step has to be told what rows to write.",
+		})
+	}
+})
 
 export const browserNodeParams = z.object({
 	url: template,
@@ -196,4 +234,48 @@ export function carriedValues(metadata: Record<string, unknown> | undefined): Re
 		else if (typeof value === "number" || typeof value === "boolean") values[key] = String(value)
 	}
 	return values
+}
+
+/**
+ * Turns a resolved `rows` template into the cells a workbook is written from.
+ *
+ * Two formats, and no CSV, for the reason `parseLoopItems` gives: a separator
+ * inside a value is a quoting problem, and a spreadsheet is exactly where a
+ * value contains a comma. `json` is an array of rows, each an array of cells —
+ * the shape a model asked for a table produces. `lines` is one row per line,
+ * whole, for the case where each row is a single value.
+ */
+/** CRLF as well as LF: a list pasted from a Windows editor is a list. */
+const LINE_BREAK = /\r?\n/
+
+export function parseWorkbookRows(text: string, format: "json" | "lines"): string[][] {
+	if (format === "lines") {
+		return text
+			.split(LINE_BREAK)
+			.map((line) => line.trim())
+			.filter((line) => line.length > 0)
+			.map((line) => [line])
+	}
+
+	let parsed: unknown
+	try {
+		parsed = JSON.parse(text)
+	} catch {
+		throw new ValidationError("This flow's spreadsheet step expected a JSON list of rows.")
+	}
+
+	if (!Array.isArray(parsed)) {
+		throw new ValidationError(
+			"This flow's spreadsheet step expected a JSON list of rows, not a single value.",
+		)
+	}
+
+	// A row given as a bare value becomes a one-cell row rather than being
+	// refused: a model asked for a single column answers with `["a","b"]` about as
+	// often as with `[["a"],["b"]]`, and both mean the same table.
+	return parsed.map((row) =>
+		Array.isArray(row)
+			? row.map((cell) => (typeof cell === "string" ? cell : JSON.stringify(cell)))
+			: [typeof row === "string" ? row : JSON.stringify(row)],
+	)
 }

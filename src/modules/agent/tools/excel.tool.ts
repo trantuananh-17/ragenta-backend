@@ -2,7 +2,7 @@ import { Buffer } from "node:buffer"
 
 import ExcelJS from "exceljs"
 
-import { isAppError } from "../../../shared/errors"
+import { ValidationError, isAppError } from "../../../shared/errors"
 import { newId } from "../../../shared/id"
 import { attachmentKey, getObject, isStorageConfigured, putObject } from "../../../storage/objects"
 import { attachmentRepository } from "../../attachment/attachment.repository"
@@ -204,7 +204,7 @@ export const excelWriteTool: AgentTool = {
 		const fileName = `${input.fileName ?? `workbook-${context.runId}-${context.stepSeq}`}.xlsx`
 
 		try {
-			const stored = await storeWorkbook(context, fileName, input.sheets)
+			const stored = await storeWorkbook(context, fileName, input.sheets, input.templateAttachmentId)
 
 			return {
 				ok: true,
@@ -239,10 +239,24 @@ async function storeWorkbook(
 	context: ToolContext,
 	fileName: string,
 	sheets: ExcelWriteInput["sheets"],
+	templateAttachmentId?: string,
 ) {
-	const workbook = new ExcelJS.Workbook()
+	const workbook = templateAttachmentId
+		? await loadTemplate(context, templateAttachmentId)
+		: new ExcelJS.Workbook()
+
 	for (const sheet of sheets) {
-		const worksheet = workbook.addWorksheet(sheet.name)
+		// A sheet the template already has is added to rather than replaced, which
+		// is what "fill in this spreadsheet" means. `getWorksheet` matches the name
+		// case-sensitively where Excel does not, so the lookup is folded — writing
+		// to "Sheet1" when the template calls it "sheet1" must not silently create
+		// a second tab nobody asked for.
+		const existing = templateAttachmentId
+			? workbook.worksheets.find(
+					(candidate) => candidate.name.toLowerCase() === sheet.name.toLowerCase(),
+				)
+			: undefined
+		const worksheet = existing ?? workbook.addWorksheet(sheet.name)
 		for (const row of sheet.rows) worksheet.addRow(row)
 	}
 
@@ -279,6 +293,35 @@ async function storeWorkbook(
 			columns: sheet.rows.reduce((widest, row) => Math.max(widest, row.length), 0),
 		})),
 	}
+}
+
+/**
+ * Opens the workbook a write is adding to.
+ *
+ * The workspace comes from the run, never from the parameter: `findOrFail` puts
+ * it in the WHERE clause, so an id naming another tenant's spreadsheet is a 404
+ * rather than a template this run gets to read and copy out of. The id may have
+ * come from a model, exactly as `excel_read`'s does.
+ *
+ * The template is opened and left alone. What is stored is a new attachment, so
+ * a run that fills in a form does not overwrite the blank one behind it — and a
+ * retry produces a second file rather than a doubly-filled first.
+ */
+async function loadTemplate(context: ToolContext, attachmentId: string) {
+	const row = await attachmentService.findOrFail(context.workspaceId, attachmentId)
+
+	if (row.kind !== "file") {
+		throw new ValidationError(`"${row.fileName}" is not a spreadsheet.`)
+	}
+	if (row.sizeBytes > MAX_SPREADSHEET_BYTES) {
+		throw new ValidationError(
+			`"${row.fileName}" is larger than the ${Math.floor(MAX_SPREADSHEET_BYTES / 1024 / 1024)} MB a step can open.`,
+		)
+	}
+
+	const workbook = new ExcelJS.Workbook()
+	await workbook.xlsx.load(toArrayBuffer(await getObject(row.storageKey)))
+	return workbook
 }
 
 /**

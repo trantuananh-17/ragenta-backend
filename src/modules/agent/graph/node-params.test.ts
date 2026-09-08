@@ -8,6 +8,7 @@ import {
 	httpNodeParams,
 	loopNodeParams,
 	parseLoopItems,
+	parseWorkbookRows,
 	plannedIterations,
 	sttNodeParams,
 	ttsNodeParams,
@@ -62,7 +63,7 @@ describe("tool node params", () => {
 			operation: "write",
 			sheets: [{ name: "Invoices", rows: [["Id", "Total"], ["{{row.id}}", "{{row.total}}"]] }],
 		})
-		expect(written.operation === "write" && written.sheets[0]?.rows).toHaveLength(2)
+		expect(written.operation === "write" && written.sheets?.[0]?.rows).toHaveLength(2)
 
 		expect(excelNodeParams.safeParse({ operation: "append", attachmentId: "att_1" }).success).toBe(
 			false,
@@ -304,5 +305,50 @@ describe("validateGraph, for loops", () => {
 		})
 
 		expect(validateGraph(graph)).toContain('"loop" is a reserved name — a template already resolves it.')
+	})
+})
+
+/**
+ * What a step's `rows` template becomes.
+ *
+ * The shapes here are the ones a model actually returns when asked for a table,
+ * and getting the loose one wrong is expensive in a way nothing reports: a
+ * single-column answer arriving as `["a","b"]` instead of `[["a"],["b"]]` would
+ * otherwise write the JSON text of each value into one cell, and the workbook
+ * would look filled in.
+ */
+describe("parseWorkbookRows", () => {
+	it("reads a list of rows", () => {
+		expect(parseWorkbookRows('[["Id","Total"],["A1","12"]]', "json")).toEqual([
+			["Id", "Total"],
+			["A1", "12"],
+		])
+	})
+
+	it("treats a bare value as a one-cell row", () => {
+		expect(parseWorkbookRows('["first","second"]', "json")).toEqual([["first"], ["second"]])
+	})
+
+	it("keeps a non-string cell as its JSON text rather than dropping it", () => {
+		expect(parseWorkbookRows("[[1,true,null]]", "json")).toEqual([["1", "true", "null"]])
+	})
+
+	it("reads one row per line", () => {
+		expect(parseWorkbookRows("first\nsecond\n", "lines")).toEqual([
+			["first"],
+			["second"],
+		])
+	})
+
+	it("ignores blank lines rather than writing empty rows", () => {
+		expect(parseWorkbookRows("a\n\n   \nb", "lines")).toEqual([["a"], ["b"]])
+	})
+
+	it("refuses text that is not JSON", () => {
+		expect(() => parseWorkbookRows("Here are the rows:", "json")).toThrow(/JSON list of rows/)
+	})
+
+	it("refuses a JSON value that is not a list", () => {
+		expect(() => parseWorkbookRows('{"rows":[]}', "json")).toThrow(/not a single value/)
 	})
 })

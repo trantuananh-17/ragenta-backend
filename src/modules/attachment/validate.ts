@@ -264,3 +264,52 @@ export function validateAudioUpload(bytes: Buffer): ValidatedAudio {
 
 	return { mimeType, sizeBytes: bytes.length, durationMs: null }
 }
+
+/**
+ * Spreadsheets, which are the one non-media file a run has a step for.
+ *
+ * Deliberately only xlsx. `excel_read` opens what is stored with ExcelJS, so a
+ * kind nothing can read would be a file the product accepts and then refuses to
+ * do anything with — worse than refusing it at the door.
+ */
+export const WORKBOOK_MIME_TYPE =
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+/** The same ceiling `excel_read` parses under: storing more than can be opened is a trap. */
+export const MAX_WORKBOOK_BYTES = 15 * 1024 * 1024
+
+const ZIP_SIGNATURE = [0x50, 0x4b, 0x03, 0x04]
+
+/**
+ * An xlsx is a ZIP, and so is a docx, a pptx, a jar and an ordinary archive —
+ * the four magic bytes say nothing about which. What separates them is the
+ * entry names, and ZIP stores those **uncompressed** in both the local headers
+ * and the central directory, so the workbook part is findable as plain bytes
+ * without inflating anything.
+ *
+ * `xl/workbook.xml` rather than `[Content_Types].xml`, which every OOXML file
+ * has: a docx renamed to .xlsx must not pass, and the extension is not an input
+ * here any more than a declared content type is anywhere else in this file.
+ */
+export function sniffWorkbookMimeType(bytes: Buffer): typeof WORKBOOK_MIME_TYPE | undefined {
+	if (!matches(bytes, 0, ZIP_SIGNATURE)) return undefined
+	return bytes.includes("xl/workbook.xml") ? WORKBOOK_MIME_TYPE : undefined
+}
+
+export interface ValidatedWorkbook {
+	mimeType: typeof WORKBOOK_MIME_TYPE
+	sizeBytes: number
+}
+
+export function validateWorkbookUpload(bytes: Buffer): ValidatedWorkbook {
+	if (bytes.length > MAX_WORKBOOK_BYTES) {
+		throw new ValidationError(
+			`The spreadsheet is larger than the ${Math.floor(MAX_WORKBOOK_BYTES / 1024 / 1024)} MB limit.`,
+		)
+	}
+
+	const mimeType = sniffWorkbookMimeType(bytes)
+	if (!mimeType) throw new ValidationError("That is not an .xlsx workbook.")
+
+	return { mimeType, sizeBytes: bytes.length }
+}

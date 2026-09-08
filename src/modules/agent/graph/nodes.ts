@@ -16,6 +16,7 @@ import {
 	loopNodeParams,
 	ocrNodeParams,
 	parseLoopItems,
+	parseWorkbookRows,
 	plannedIterations,
 	sttNodeParams,
 	ttsNodeParams,
@@ -677,14 +678,42 @@ const excelNode: NodeImplementation = {
 			})
 		}
 
+		/*
+			One template producing every row, or a grid typed cell by cell. The
+			template wins where both are set: a grid cannot say "one row per thing
+			the run found", which is what a flow writing a spreadsheet is nearly
+			always for, and the grid is only still read so a graph published before
+			this existed keeps working.
+		*/
+		const sheets = params.rows
+			? [
+					{
+						name: params.sheetName,
+						rows: parseWorkbookRows(
+							resolveTemplate(params.rows, scope(context)),
+							params.rowsFormat,
+						),
+					},
+				]
+			: (params.sheets ?? []).map((sheet) => ({
+					name: sheet.name,
+					// Per cell, so a row can be built out of what earlier nodes produced.
+					rows: sheet.rows.map((row) =>
+						row.map((cell) => resolveTemplate(cell, scope(context))),
+					),
+				}))
+
 		return yield* runToolNode(context, node, nodeId, "excel_write", {
 			...(params.fileName ? { fileName: params.fileName } : {}),
-			sheets: params.sheets.map((sheet) => ({
-				name: sheet.name,
-				// Per cell, so a row can be built out of what earlier nodes produced —
-				// which is the whole reason a flow writes a spreadsheet at all.
-				rows: sheet.rows.map((row) => row.map((cell) => resolveTemplate(cell, scope(context)))),
-			})),
+			...(params.templateAttachmentId
+				? {
+						templateAttachmentId: resolveTemplate(
+							params.templateAttachmentId,
+							scope(context),
+						),
+					}
+				: {}),
+			sheets,
 		})
 	},
 }

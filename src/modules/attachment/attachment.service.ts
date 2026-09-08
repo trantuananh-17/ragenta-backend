@@ -13,7 +13,13 @@ import {
 import { StorageUnavailableError } from "../../storage/objects"
 import { toAttachmentResponse } from "./attachment.dto"
 import { attachmentRepository } from "./attachment.repository"
-import { sniffImageMimeType, validateAudioUpload, validateImageUpload } from "./validate"
+import {
+	sniffImageMimeType,
+	sniffWorkbookMimeType,
+	validateAudioUpload,
+	validateImageUpload,
+	validateWorkbookUpload,
+} from "./validate"
 
 const log = logger.child({ module: "attachment" })
 
@@ -27,7 +33,7 @@ export interface UploadedFile {
 
 /** What the bytes turned out to be, and the per-kind columns that follow from it. */
 interface ValidatedUpload {
-	kind: "image" | "audio"
+	kind: "image" | "audio" | "file"
 	mimeType: string
 	sizeBytes: number
 	width: number | null
@@ -40,11 +46,21 @@ interface ValidatedUpload {
  * path (ADR-037). The image sniff runs first and settles the RIFF container both
  * families share — a WAV cannot pass it, because `sniffImageMimeType` requires
  * the WEBP form word as well as the RIFF prefix.
+ *
+ * The workbook sniff runs before audio for the opposite reason: it cannot
+ * collide with anything here (no audio format this accepts begins with a ZIP
+ * header), and audio is the fallthrough that produces the error message, so a
+ * spreadsheet reaching it would be refused as "not a recording we can read".
  */
 function validateUpload(bytes: Buffer): ValidatedUpload {
 	if (sniffImageMimeType(bytes)) {
 		const image = validateImageUpload(bytes)
 		return { kind: "image", ...image, durationMs: null }
+	}
+
+	if (sniffWorkbookMimeType(bytes)) {
+		const workbook = validateWorkbookUpload(bytes)
+		return { kind: "file", ...workbook, width: null, height: null, durationMs: null }
 	}
 
 	const audio = validateAudioUpload(bytes)

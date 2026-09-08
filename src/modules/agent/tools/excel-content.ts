@@ -119,6 +119,14 @@ export const excelWriteParameters = z.object({
 		.refine((sheets) => countCells(sheets) <= MAX_CELLS_WRITE, {
 			message: `A workbook may hold at most ${MAX_CELLS_WRITE} cells.`,
 		}),
+	templateAttachmentId: z
+		.string()
+		.trim()
+		.min(1)
+		.optional()
+		.describe(
+			"An existing .xlsx to add to instead of starting an empty workbook. Rows are appended below what a sheet of the same name already holds; a sheet the template does not have is created. The template itself is never modified — the result is a new attachment.",
+		),
 })
 
 export type ExcelWriteInput = z.infer<typeof excelWriteParameters>
