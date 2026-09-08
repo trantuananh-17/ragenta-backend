@@ -7,6 +7,7 @@ import { requireResourcePermission } from "../../api/middleware/require-resource
 import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
 import { triggerController } from "../trigger/trigger.controller"
+import { widgetController } from "../widget/widget.controller"
 import { agentController } from "./agent.controller"
 
 /**
@@ -160,4 +161,27 @@ agentRoutes.delete(
 	workspaceScope,
 	requirePermission("agent.update"),
 	triggerController.remove,
+)
+
+/**
+ * Embedded chats. Managed by a person with a session; talked to by strangers
+ * through `/v1/widget/*`, which carries none (ADR-065).
+ */
+agentRoutes.get(
+	"/:workspaceId/widgets",
+	workspaceScope,
+	requirePermission("widget.read"),
+	widgetController.list,
+)
+agentRoutes.put(
+	"/:workspaceId/widgets",
+	workspaceScope,
+	requirePermission("widget.manage"),
+	widgetController.save,
+)
+agentRoutes.delete(
+	"/:workspaceId/widgets/:widgetId",
+	workspaceScope,
+	requirePermission("widget.manage"),
+	widgetController.remove,
 )

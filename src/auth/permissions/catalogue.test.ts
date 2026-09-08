@@ -177,6 +177,10 @@ const LEGACY_ROUTE_GATES: ReadonlyArray<readonly [PermissionKey, readonly Worksp
 	["connection.manage", ["owner", "admin"]],
 	// New in phase 8, and given the same audience as a connection for the same
 	// reason: both hold a credential an agent acts through.
+	["widget.read", ["owner", "admin", "member", "viewer"]],
+	// Publishing one exposes an endpoint a stranger can reach and that spends the
+	// workspace's credits. Same audience as billing.
+	["widget.manage", ["owner", "admin"]],
 	["dataSource.read", ["owner", "admin", "member", "viewer"]],
 	// Approving a query decides what SQL an agent may cause to run against a
 	// customer's own database. Same audience as every other credential here.

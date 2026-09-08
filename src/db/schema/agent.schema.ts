@@ -222,6 +222,16 @@ export const agentRun = pgTable(
 		/** manual | api | schedule. Only `manual` exists in Phase 1. */
 		trigger: text("trigger").default("manual").notNull(),
 		/**
+		 * The embedded widget that caused this run, when one did.
+		 *
+		 * A plain column rather than a reference to `chat_widget`, because the run
+		 * is a record of what happened and must survive the widget being deleted —
+		 * the same reasoning `usage_ledger` applies to a deleted project. It is what
+		 * ties a widget's spend to the ledger without changing the reference format
+		 * every other charge uses (ADR-065).
+		 */
+		widgetId: text("widget_id"),
+		/**
 		 * pending | running | awaiting_input | succeeded | failed | stopped.
 		 *
 		 * `pending` is a run that exists but that no process has claimed —
@@ -281,7 +291,7 @@ export const agentRun = pgTable(
 		),
 		check(
 			"agentRun_trigger_check",
-			sql`${table.trigger} in ('manual', 'api', 'schedule', 'webhook')`,
+			sql`${table.trigger} in ('manual', 'api', 'schedule', 'webhook', 'widget')`,
 		),
 	],
 )

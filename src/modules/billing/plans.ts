@@ -50,6 +50,14 @@ export interface PlanLimits {
 	/** May buy top-up packs. Deliberately false on free — see TOPUP_PACKS. */
 	topupsEnabled: boolean
 	modelTiers: ModelTier[]
+	/**
+	 * Embeddable chat widgets this plan may publish. 0 on free, null unlimited.
+	 *
+	 * Free carries none deliberately: a widget is a **public, unauthenticated**
+	 * endpoint that calls a model, which is the clearest abuse surface in the
+	 * product — and it is the feature worth upgrading for (ADR-065).
+	 */
+	widgetLimit: number | null
 	price: PlanPrice
 	/** Key into `env.stripe.prices`. Null for plans that are not self-serve. */
 	stripePriceKey: "pro" | "team" | null
@@ -69,6 +77,7 @@ export const PLAN_LIMITS: Record<PlanName, PlanLimits> = {
 		flatCredits: null,
 		topupsEnabled: false,
 		modelTiers: ["economy"],
+		widgetLimit: 0,
 		price: { monthlyUsd: 0, perSeatUsd: null, includedSeats: 1, extraSeatUsd: null },
 		stripePriceKey: null,
 	},
@@ -78,6 +87,7 @@ export const PLAN_LIMITS: Record<PlanName, PlanLimits> = {
 		flatCredits: null,
 		topupsEnabled: true,
 		modelTiers: ["economy", "premium"],
+		widgetLimit: 1,
 		price: { monthlyUsd: null, perSeatUsd: 29, includedSeats: null, extraSeatUsd: 29 },
 		stripePriceKey: "pro",
 	},
@@ -87,6 +97,7 @@ export const PLAN_LIMITS: Record<PlanName, PlanLimits> = {
 		flatCredits: 8_000_000,
 		topupsEnabled: true,
 		modelTiers: ["economy", "premium"],
+		widgetLimit: 5,
 		price: { monthlyUsd: 99, perSeatUsd: null, includedSeats: 5, extraSeatUsd: 19 },
 		stripePriceKey: "team",
 	},
@@ -96,6 +107,7 @@ export const PLAN_LIMITS: Record<PlanName, PlanLimits> = {
 		flatCredits: null,
 		topupsEnabled: true,
 		modelTiers: ["economy", "premium"],
+		widgetLimit: null,
 		price: { monthlyUsd: null, perSeatUsd: null, includedSeats: null, extraSeatUsd: null },
 		// Enterprise is invoiced by hand, never through self-serve checkout.
 		stripePriceKey: null,

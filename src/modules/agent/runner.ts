@@ -178,6 +178,15 @@ export const agentRunner = {
 		agentId: string,
 		input: RunAgentInput,
 		actorId: string | null,
+		/**
+		 * Set when an embedded widget caused this run.
+		 *
+		 * It is what ties the run's spend to a widget's daily ceiling, and it is
+		 * recorded rather than inferred: a run started by a stranger on somebody
+		 * else's website should be distinguishable in the run list from one a
+		 * colleague started (ADR-065).
+		 */
+		source?: { trigger: "widget"; widgetId: string },
 	): Promise<PreparedRun> {
 		const agent = await agentRepository.findById(workspaceId, agentId)
 		if (!agent) throw new NotFoundError("Agent")
@@ -192,7 +201,8 @@ export const agentRunner = {
 			agentVersionId: version.id,
 			projectId: agent.projectId,
 			userId: actorId,
-			trigger: "manual",
+			trigger: source?.trigger ?? "manual",
+			widgetId: source?.widgetId ?? null,
 			// `running` is claimed by the attempt itself, in `stream`, so a run
 			// that never gets that far is visibly waiting rather than apparently
 			// executing in a process that has not touched it.
