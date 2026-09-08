@@ -19,6 +19,8 @@ import { speechTranscribeTool } from "./speech-transcribe.tool"
 import { webSearchTool } from "./web-search.tool"
 import type { McpToolSummary } from "../../../db/schema/mcp.schema"
 import { isMcpToolId, mcpService, parseMcpToolId } from "../../mcp/mcp.service"
+import { datasourceService } from "../../datasource/datasource.service"
+import { createDatabaseTool } from "./database.tool"
 import { createMcpTool } from "./mcp.tool"
 import { TOOL_CATALOGUE, isToolId } from "./catalogue"
 import type { ToolId } from "./catalogue"
@@ -128,6 +130,37 @@ export function toDefinition(tool: AgentTool): ToolDefinition {
  * fatal. A version is an immutable record of what was configured; a server
  * deleted after it was published should cost that agent one tool, not every run.
  */
+/**
+ * The database tool, built from the queries this workspace has approved.
+ *
+ * Asynchronous and separate from `toolsFor` for the same reason the MCP tools
+ * are: the list is a read. The tool's own description carries the catalogue, so
+ * a model can only call what it has been told about — and telling it is the same
+ * act as approving (ADR-064).
+ */
+export async function databaseToolFor(
+	workspaceId: string,
+	ids: string[],
+): Promise<AgentTool[]> {
+	if (!ids.includes("database_query")) return []
+
+	const queries = await datasourceService.callableQueries(workspaceId)
+	if (queries.length === 0) return []
+
+	return [
+		createDatabaseTool(
+			queries.map((query) => ({
+				name: query.name,
+				description: query.description,
+				parameters: query.parameters.map((parameter) => ({
+					name: parameter.name,
+					type: parameter.type,
+				})),
+			})),
+		),
+	]
+}
+
 export async function mcpToolsFor(
 	workspaceId: string,
 	ids: string[],
