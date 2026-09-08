@@ -32,6 +32,12 @@ export const TOOL_IDS = [
 	"browser_read",
 	"memory_write",
 	"memory_search",
+	"gmail_search",
+	"gmail_send",
+	"drive_search",
+	"calendar_list_events",
+	"sheets_read",
+	"sheets_append",
 ] as const
 export type ToolId = (typeof TOOL_IDS)[number]
 
@@ -163,6 +169,46 @@ export const TOOL_CATALOGUE: Record<
 		description:
 			"Look through this agent's own memories. The most relevant are already in context at the start of a run; this is for something older or more specific.",
 		writes: false,
+		requires: null,
+	},
+	gmail_search: {
+		title: "Search Gmail",
+		description:
+			"Search the connected Gmail mailbox and read the matching messages. Needs a Google account connected to this workspace.",
+		writes: false,
+		requires: null,
+	},
+	gmail_send: {
+		title: "Send from Gmail",
+		description:
+			"Send a plain-text email as the connected Google account. It goes out as that person.",
+		writes: true,
+		requires: null,
+	},
+	drive_search: {
+		title: "Search Google Drive",
+		description:
+			"Find files in the connected Drive by name or content. Returns names, ids and links, not contents.",
+		writes: false,
+		requires: null,
+	},
+	calendar_list_events: {
+		title: "Read Google Calendar",
+		description: "List events over a date range from the connected calendar. Read only.",
+		writes: false,
+		requires: null,
+	},
+	sheets_read: {
+		title: "Read a Google Sheet",
+		description: "Read a range of cells from a sheet the connected account can open.",
+		writes: false,
+		requires: null,
+	},
+	sheets_append: {
+		title: "Append to a Google Sheet",
+		description:
+			"Add rows after the last one with data. Values are written literally, so a cell starting with = stays text rather than becoming a formula.",
+		writes: true,
 		requires: null,
 	},
 }
