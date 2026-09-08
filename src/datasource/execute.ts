@@ -2,6 +2,7 @@ import mysql from "mysql2/promise"
 import { Client } from "pg"
 
 import { ValidationError } from "../shared/errors"
+import { scrubDsns } from "./dsn"
 import type { DataSourceTable } from "../db/schema/datasource.schema"
 
 /**
@@ -67,6 +68,14 @@ async function runPostgres(
 
 	try {
 		await client.connect()
+	} catch (error) {
+		// The driver may be holding a socket it opened before giving up, and this
+		// runs on a schedule — a leak per failed check adds up.
+		await client.end().catch(() => undefined)
+		throw asConnectError(error)
+	}
+
+	try {
 		// The real guarantee against a write. `SET TRANSACTION READ ONLY` makes
 		// Postgres itself refuse an INSERT, UPDATE, DELETE, DDL or a function that
 		// writes — whatever the statement says and however it is spelled.
@@ -97,7 +106,7 @@ async function runMysql(
 	const connection = await mysql
 		.createConnection({ uri: dsn, connectTimeout: CONNECT_TIMEOUT_MS, rowsAsArray: true })
 		.catch((error: unknown) => {
-			throw asQueryError(error)
+			throw asConnectError(error)
 		})
 
 	try {
@@ -127,9 +136,32 @@ async function runMysql(
  * connection string into a connection error and it carries the password.
  */
 function asQueryError(error: unknown): ValidationError {
+	return new ValidationError(`The database refused the query: ${clean(error)}`)
+}
+
+/**
+ * A connection that never opened, which is a different thing from a refusal.
+ *
+ * Worth its own message because the driver's is unreadable on its own: Postgres
+ * says "timeout expired" and nothing more, which reads as the *query* having
+ * timed out when in fact nothing answered on the host and port at all. That is
+ * almost always a firewall, or a database listening only on localhost, and
+ * saying so is the difference between a line somebody acts on and a support
+ * ticket.
+ */
+function asConnectError(error: unknown): ValidationError {
+	const message = clean(error)
+	if (/timeout expired|etimedout|timed out/i.test(message)) {
+		return new ValidationError(
+			"Could not reach the database: nothing answered on that host and port. Check that it listens on a public address and that a firewall allows this server through.",
+		)
+	}
+	return new ValidationError(`Could not reach the database: ${message}`)
+}
+
+function clean(error: unknown): string {
 	const raw = error instanceof Error ? error.message : String(error)
-	const scrubbed = raw.replace(/(:\/\/[^:@\s]+):[^@\s]+@/g, "$1:***@")
-	return new ValidationError(`The database refused the query: ${scrubbed.slice(0, 400)}`)
+	return scrubDsns(raw).slice(0, 400)
 }
 
 /**

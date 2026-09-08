@@ -76,19 +76,27 @@ export const oauthController = {
 
 	/** The console's own list, with the redirect URI to register at each provider. */
 	async listForAdmin(c: AppContext) {
-		const providers = await oauthService.listProviders()
-		return c.json({
-			providers: providers.map((provider) => ({
-				...provider,
-				redirectUri: oauthService.redirectUriFor(provider.id),
-			})),
-		})
+		return c.json({ providers: forAdmin(await oauthService.listProviders()) })
 	},
 
 	async saveClient(c: AppContext) {
 		const user = requireUser(c)
 		const input = saveOAuthClientSchema.parse(await c.req.json())
 		const providers = await oauthService.saveClient(requireParam(c, "provider"), input, user.id)
-		return c.json({ providers })
+		return c.json({ providers: forAdmin(providers) })
 	},
+}
+
+/**
+ * A provider as the console reads it: the list, plus the redirect URI.
+ *
+ * Both endpoints answer with this shape. They diverged once — a save replied
+ * without `redirectUri`, the console parses every reply with one schema, and a
+ * save that had already been written reported "Could not save".
+ */
+function forAdmin(providers: Awaited<ReturnType<typeof oauthService.listProviders>>) {
+	return providers.map((provider) => ({
+		...provider,
+		redirectUri: oauthService.redirectUriFor(provider.id),
+	}))
 }
