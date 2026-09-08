@@ -1,6 +1,7 @@
 import type { z } from "zod"
 
 import type { ToolDefinition } from "../../../ai/clients"
+import type { ModelSelection } from "../../model/model.service"
 
 /**
  * What a tool is allowed to know about the run that called it.
@@ -17,6 +18,17 @@ export interface ToolContext {
 	runId: string
 	/** Which step of the run this call is, for the usage reference it writes. */
 	stepSeq: number
+	/**
+	 * The model the run itself is configured for, where it has one.
+	 *
+	 * A tool that calls a provider spends on this rather than on whatever the
+	 * workspace is set to: an agent given a vision model was given it for its
+	 * image step, and running that step on the workspace's chat model answers
+	 * about the picture on a model nobody chose — and refuses for reasons about a
+	 * model nobody chose either. Absent for a caller with no run behind it, which
+	 * leaves the workspace's own model as the answer.
+	 */
+	model?: ModelSelection
 	signal?: AbortSignal
 }
 

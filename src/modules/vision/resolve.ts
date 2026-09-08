@@ -19,7 +19,7 @@ export interface ResolvedModel {
 }
 
 /**
- * The workspace's chat model, entitlement re-checked, with a client that can
+ * The chat model a call runs on, entitlement re-checked, with a client that can
  * actually be called.
  *
  * `resolveChatModel` re-checks entitlement itself; a selection that arrived with
@@ -30,6 +30,10 @@ export async function resolveCompletionModel(
 	workspaceId: string,
 	requested?: ModelSelection,
 ): Promise<ResolvedModel> {
+	// `??` short-circuits, so a caller that named a model never resolves the
+	// workspace's — which matters because resolving it checks it against the plan
+	// and throws. Reading it either way would refuse a call whose caller named a
+	// model the plan allows, citing a model the caller never chose.
 	const selection = requested ?? (await modelService.resolveChatModel(workspaceId))
 	if (requested) await modelService.assertSelectable(workspaceId, requested, "chat")
 

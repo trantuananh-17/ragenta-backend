@@ -53,6 +53,9 @@ export const imageOcrTool: AgentTool = {
 			const outcome = await visionService.extractDocument({
 				workspaceId: context.workspaceId,
 				image: loaded.image,
+				// The transcription pass only. `extractDocument` keeps the field pass
+				// on the workspace's chat model, because that one reads text.
+				model: context.model,
 				signal: context.signal,
 			})
 

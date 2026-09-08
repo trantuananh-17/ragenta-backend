@@ -345,11 +345,20 @@ export const agentRunner = {
 		const attachments = await this.resolveAttachments(workspaceId, input, !version.graph)
 
 		/*
-			A flow reaches a picture through its `vision` or `ocr` node, which calls
-			a tool and never puts bytes on the chat wire — so a text-only model
-			running a flow is fine, and refusing it here would take the feature away
-			from the shape it was built for. Only a single-prompt run sends the
-			image to the model itself, and only that needs a model that can see.
+			Refused here only for a single-prompt run, which sends the image to the
+			model itself. A flow reaches a picture through its `vision` or `ocr`
+			node, and those refuse at the step rather than before the run — so a
+			flow that also does useful work without the picture still does it, and
+			the refusal names the step that could not proceed.
+
+			**Its node uses the agent's own model, not the workspace's.** That is a
+			deliberate trade and it costs something: an agent on a cheap text model
+			with one image step used to borrow whatever the workspace was set to,
+			and now refuses instead. The alternative was worse — a step silently
+			running on a model nobody chose for it is exactly the defect this
+			replaced, and a fallback would have hidden the case that actually
+			happens, which is a vision model recorded in the catalogue as blind. A
+			per-node model override is the real answer and is not built.
 
 			Both halves are checked, as chat checks them: the model has to be able
 			to read an image, and this deployment's adapter has to actually send
@@ -877,6 +886,7 @@ export const agentRunner = {
 						userId: prepared.actorId,
 						runId: prepared.run.id,
 						stepSeq: 0,
+						model: selection,
 						signal: hooks.signal,
 					})
 				: {
@@ -945,6 +955,7 @@ export const agentRunner = {
 				projectId: prepared.agent.projectId,
 				userId: prepared.actorId,
 				runId: prepared.run.id,
+				model: selection,
 				signal: hooks.signal,
 			},
 			isStopped: hooks.stopCheck,

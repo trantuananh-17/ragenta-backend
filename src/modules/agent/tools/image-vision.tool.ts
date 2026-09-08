@@ -30,6 +30,7 @@ export const imageVisionTool: AgentTool = {
 				workspaceId: context.workspaceId,
 				question: input.question,
 				images: [loaded.image],
+				model: context.model,
 				signal: context.signal,
 			})
 

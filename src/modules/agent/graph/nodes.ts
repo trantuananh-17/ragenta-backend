@@ -155,6 +155,7 @@ const llmNode: NodeImplementation = {
 				projectId: context.projectId,
 				userId: context.userId,
 				runId: context.runId,
+				model: context.selection,
 				signal: context.signal,
 			},
 			signal: context.signal,
@@ -284,6 +285,7 @@ const agentNode: NodeImplementation = {
 				projectId: context.projectId,
 				userId: context.userId,
 				runId: context.runId,
+				model: context.selection,
 				signal: context.signal,
 			},
 			signal: context.signal,
@@ -551,6 +553,10 @@ async function* runToolNode(
 			projectId: context.projectId,
 			userId: context.userId,
 			runId: context.runId,
+			// The model the agent version names, so an image step runs on the model
+			// its author chose rather than on the workspace's chat setting — which
+			// is a different model, chosen by somebody else, for something else.
+			model: context.selection,
 			// Names a generated artefact — `speech-{run}-{seq}.mp3` — and nothing
 			// else. Storage keys come from the new row's id, so a repeated number
 			// collides with nothing; `runner.ts` passes a constant here for the same
