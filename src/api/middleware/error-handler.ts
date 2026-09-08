@@ -3,7 +3,7 @@ import type { ErrorHandler } from "hono"
 import { HTTPException } from "hono/http-exception"
 import { ZodError } from "zod"
 
-import { isAppError } from "../../shared/errors"
+import { RateLimitedError, isAppError } from "../../shared/errors"
 import { logger } from "../../shared/logger"
 import type { AppEnv } from "../types"
 
@@ -40,6 +40,11 @@ export const errorHandler: ErrorHandler<AppEnv> = (error, c) => {
 
 	if (isAppError(error)) {
 		log.warn("request.failed", { code: error.code, status: error.status })
+		// Set here rather than at the throw site: a service raising a domain
+		// error has no Hono context, and this is the layer that owns the wire.
+		if (error instanceof RateLimitedError) {
+			c.header("Retry-After", String(error.retryAfterSeconds))
+		}
 		return c.json<ErrorBody>(
 			{
 				error: { code: error.code, message: error.message, details: error.details },

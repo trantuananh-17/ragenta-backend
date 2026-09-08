@@ -1,5 +1,6 @@
 import { Hono } from "hono"
 
+import { rateLimit } from "../../api/middleware/rate-limit"
 import { requireAuth } from "../../api/middleware/session"
 import { requireWorkspaceRole, workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
@@ -17,6 +18,19 @@ export const chatRoutes = new Hono<AppEnv>()
 chatRoutes.use("*", requireAuth)
 
 const contributor = requireWorkspaceRole("owner", "admin", "member")
+
+/**
+ * Sending is the expensive verb here: it retrieves, it calls a provider, and it
+ * bills. The ceiling is far above what a person types and far below what a
+ * script can spend — the credit ledger is what actually caps the money, and
+ * this is what stops a loop reaching that cap in seconds.
+ */
+const sending = rateLimit({
+	name: "chat.send",
+	limit: 30,
+	windowSeconds: 60,
+	message: "Too many messages in a row. Wait a moment before sending another.",
+})
 
 chatRoutes.get("/:workspaceId/conversations", workspaceScope, chatController.listConversations)
 chatRoutes.post(
@@ -51,12 +65,14 @@ chatRoutes.post(
 	"/:workspaceId/conversations/:conversationId/messages",
 	workspaceScope,
 	contributor,
+	sending,
 	chatController.sendMessage,
 )
 chatRoutes.post(
 	"/:workspaceId/conversations/:conversationId/messages/stream",
 	workspaceScope,
 	contributor,
+	sending,
 	chatController.streamMessage,
 )
 chatRoutes.post(

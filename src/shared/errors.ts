@@ -47,6 +47,21 @@ export class ValidationError extends AppError {
 	}
 }
 
+/**
+ * Too many requests in the window. `retryAfterSeconds` is carried here rather
+ * than set as a header at the throw site, because the API error handler is the
+ * only place that turns a domain error into HTTP and a service that has to
+ * reach for `c.header` is a service that knows about Hono.
+ */
+export class RateLimitedError extends AppError {
+	readonly retryAfterSeconds: number
+
+	constructor(retryAfterSeconds: number, message = "Too many requests. Try again shortly.") {
+		super("RATE_LIMITED", message, 429)
+		this.retryAfterSeconds = retryAfterSeconds
+	}
+}
+
 /** Plan/quota refusals — the caller is authenticated and allowed, but out of entitlement. */
 export class EntitlementError extends AppError {
 	constructor(code: string, message: string, details?: unknown) {

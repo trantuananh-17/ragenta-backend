@@ -24,6 +24,7 @@ import { usageRoutes } from "../modules/usage/usage.routes"
 import { workspaceRoutes } from "../modules/workspace/workspace.routes"
 import { errorHandler } from "./middleware/error-handler"
 import { buildOpenApiDocument, docsPage } from "./openapi"
+import { rateLimit } from "./middleware/rate-limit"
 import { requestContext } from "./middleware/request-context"
 import { attachSession } from "./middleware/session"
 import type { AppEnv } from "./types"
@@ -86,6 +87,35 @@ export function createApp() {
 			database ? 200 : 503,
 		)
 	})
+
+	/**
+	 * Only the paths where the request is an attempt at a credential, counted by
+	 * address because the identity is the thing being guessed.
+	 *
+	 * Not `/v1/auth/*`: `get-session` runs on every page load of both frontends,
+	 * so a window wide enough for a person with several tabs open is a window too
+	 * wide to stop anything, and one narrow enough to stop something signs that
+	 * person out mid-session. Better Auth applies its own limits underneath these.
+	 *
+	 * Registered before the mount below, because Hono applies middleware only to
+	 * handlers added after it.
+	 */
+	const credentialAttempts = rateLimit({
+		name: "auth",
+		limit: 20,
+		windowSeconds: 300,
+		message: "Too many attempts from this address. Wait a few minutes and try again.",
+	})
+
+	for (const path of [
+		"/v1/auth/sign-in/*",
+		"/v1/auth/sign-up/*",
+		"/v1/auth/request-password-reset",
+		"/v1/auth/forget-password",
+		"/v1/auth/reset-password",
+	]) {
+		app.use(path, credentialAttempts)
+	}
 
 	// Better Auth owns everything under its own base path and manages its own
 	// session handling, so it is mounted before our session middleware.

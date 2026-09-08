@@ -1,5 +1,6 @@
 import { Hono } from "hono"
 
+import { rateLimit } from "../../api/middleware/rate-limit"
 import { requireAuth } from "../../api/middleware/session"
 import { requireWorkspaceRole, workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
@@ -19,10 +20,25 @@ speechRoutes.use("*", requireAuth)
 
 const contributor = requireWorkspaceRole("owner", "admin", "member")
 
+/** Both routes are a paid provider call each. Counted together, per person. */
+const speaking = rateLimit({
+	name: "speech",
+	limit: 30,
+	windowSeconds: 60,
+	message: "Too many recordings in a row. Wait a moment and try again.",
+})
+
 speechRoutes.post(
 	"/:workspaceId/attachments/:attachmentId/transcribe",
 	workspaceScope,
 	contributor,
+	speaking,
 	speechController.transcribe,
 )
-speechRoutes.post("/:workspaceId/speech", workspaceScope, contributor, speechController.synthesize)
+speechRoutes.post(
+	"/:workspaceId/speech",
+	workspaceScope,
+	contributor,
+	speaking,
+	speechController.synthesize,
+)

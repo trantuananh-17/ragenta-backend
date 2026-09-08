@@ -27,6 +27,13 @@ const envSchema = z.object({
 	GOOGLE_CLIENT_ID: z.string().optional(),
 	GOOGLE_CLIENT_SECRET: z.string().optional(),
 
+	/**
+	 * The escape hatch for a limiter that misfires against real traffic. Off
+	 * means the counters are not consulted at all — the credit ledger and Better
+	 * Auth's own limits are what remain.
+	 */
+	RATE_LIMIT_ENABLED: z.enum(["true", "false"]).default("true"),
+
 	DATABASE_URL: z.string().min(1),
 	REDIS_URL: z.string().min(1),
 
@@ -221,6 +228,8 @@ export const env = {
 				? { clientId: raw.GOOGLE_CLIENT_ID, clientSecret: raw.GOOGLE_CLIENT_SECRET }
 				: undefined,
 	},
+
+	rateLimit: { enabled: raw.RATE_LIMIT_ENABLED === "true" },
 
 	databaseUrl: raw.DATABASE_URL,
 	redisUrl: raw.REDIS_URL,
