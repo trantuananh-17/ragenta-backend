@@ -1,7 +1,8 @@
 import { Hono } from "hono"
 
 import { requireAuth } from "../../api/middleware/session"
-import { requireWorkspaceRole, workspaceScope } from "../../api/middleware/workspace-scope"
+import { requirePermission } from "../../api/middleware/require-permission"
+import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
 import { billingController } from "./billing.controller"
 
@@ -20,7 +21,7 @@ billingRoutes.get("/:workspaceId/billing", workspaceScope, billingController.sum
 billingRoutes.get(
 	"/:workspaceId/billing/transactions",
 	workspaceScope,
-	requireWorkspaceRole("owner", "admin"),
+	requirePermission("transaction.read"),
 	billingController.transactions,
 )
 
@@ -28,24 +29,24 @@ billingRoutes.get(
 billingRoutes.post(
 	"/:workspaceId/billing/checkout",
 	workspaceScope,
-	requireWorkspaceRole("owner", "admin"),
+	requirePermission("billing.manage"),
 	billingController.createCheckout,
 )
 billingRoutes.post(
 	"/:workspaceId/billing/portal",
 	workspaceScope,
-	requireWorkspaceRole("owner", "admin"),
+	requirePermission("billing.manage"),
 	billingController.createPortal,
 )
 billingRoutes.get(
 	"/:workspaceId/billing/auto-reload",
 	workspaceScope,
-	requireWorkspaceRole("owner", "admin"),
+	requirePermission("billing.manage"),
 	billingController.getAutoReload,
 )
 billingRoutes.put(
 	"/:workspaceId/billing/auto-reload",
 	workspaceScope,
-	requireWorkspaceRole("owner", "admin"),
+	requirePermission("billing.manage"),
 	billingController.updateAutoReload,
 )

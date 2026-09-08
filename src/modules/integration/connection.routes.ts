@@ -1,7 +1,8 @@
 import { Hono } from "hono"
 
 import { requireAuth } from "../../api/middleware/session"
-import { requireWorkspaceRole, workspaceScope } from "../../api/middleware/workspace-scope"
+import { requirePermission } from "../../api/middleware/require-permission"
+import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
 import { connectionController } from "./integration.controller"
 
@@ -19,7 +20,6 @@ export const connectionRoutes = new Hono<AppEnv>()
 
 connectionRoutes.use("*", requireAuth)
 
-const credentialAdmin = requireWorkspaceRole("owner", "admin")
 
 connectionRoutes.get("/:workspaceId/connections", workspaceScope, connectionController.list)
 connectionRoutes.get(
@@ -30,18 +30,18 @@ connectionRoutes.get(
 connectionRoutes.put(
 	"/:workspaceId/connections/:connectionId",
 	workspaceScope,
-	credentialAdmin,
+	requirePermission("connection.manage"),
 	connectionController.save,
 )
 connectionRoutes.delete(
 	"/:workspaceId/connections/:connectionId",
 	workspaceScope,
-	credentialAdmin,
+	requirePermission("connection.manage"),
 	connectionController.remove,
 )
 connectionRoutes.post(
 	"/:workspaceId/connections/:connectionId/check",
 	workspaceScope,
-	credentialAdmin,
+	requirePermission("connection.manage"),
 	connectionController.check,
 )

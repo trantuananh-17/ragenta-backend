@@ -22,6 +22,7 @@ import {
 	sendWorkspaceInvitationEmail,
 } from "../mail/emails"
 import { billingService } from "../modules/billing/billing.service"
+import { permissionService } from "../modules/rbac/permission.service"
 import { AppError } from "../shared/errors"
 import { defaultWorkspaceId } from "./active-workspace"
 import { ac, roles } from "./permissions"
@@ -180,6 +181,25 @@ export const auth = betterAuth({
 					await billingService
 						.assertSeatAvailable(incoming.organizationId)
 						.catch(toApiError)
+				},
+				/**
+				 * Better Auth owns `member.role` and writes it inside its own
+				 * handlers, before any Ragenta code runs — so for these two
+				 * operations the direction of truth is Better Auth → us, and these
+				 * hooks are what keeps `member_role` from drifting (ADR-046).
+				 *
+				 * Without them a role changed on the members screen would leave the
+				 * person's permissions on their previous role: visible on no screen,
+				 * and wrong until the next deploy's backfill.
+				 */
+				async afterAddMember({ member: added }) {
+					await permissionService.syncFromBetterAuthRole(added.id, added.role)
+				},
+				async afterUpdateMemberRole({ member: updated }) {
+					await permissionService.syncFromBetterAuthRole(updated.id, updated.role)
+				},
+				async afterRemoveMember({ member: removed }) {
+					await permissionService.invalidateMember(removed.id)
 				},
 			},
 			async sendInvitationEmail(data) {

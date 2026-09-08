@@ -1,7 +1,9 @@
 import { Hono } from "hono"
 
 import { requireAuth } from "../../api/middleware/session"
-import { requireWorkspaceRole, workspaceScope } from "../../api/middleware/workspace-scope"
+import { requirePermission } from "../../api/middleware/require-permission"
+import { requireResourcePermission } from "../../api/middleware/require-resource-permission"
+import { workspaceScope } from "../../api/middleware/workspace-scope"
 import type { AppEnv } from "../../api/types"
 import { projectController } from "./project.controller"
 
@@ -21,36 +23,37 @@ projectRoutes.get("/:workspaceId/projects", workspaceScope, projectController.li
 projectRoutes.post(
 	"/:workspaceId/projects",
 	workspaceScope,
-	requireWorkspaceRole("owner", "admin", "member"),
+	requirePermission("project.create"),
 	projectController.create,
 )
 
 projectRoutes.get(
 	"/:workspaceId/projects/:projectId",
 	workspaceScope,
+	requireResourcePermission("project.read", "project", "projectId"),
 	projectController.get,
 )
 projectRoutes.patch(
 	"/:workspaceId/projects/:projectId",
 	workspaceScope,
-	requireWorkspaceRole("owner", "admin", "member"),
+	requireResourcePermission("project.update", "project", "projectId"),
 	projectController.update,
 )
 projectRoutes.post(
 	"/:workspaceId/projects/:projectId/archive",
 	workspaceScope,
-	requireWorkspaceRole("owner", "admin"),
+	requireResourcePermission("project.archive", "project", "projectId"),
 	projectController.archive,
 )
 projectRoutes.post(
 	"/:workspaceId/projects/:projectId/restore",
 	workspaceScope,
-	requireWorkspaceRole("owner", "admin"),
+	requireResourcePermission("project.archive", "project", "projectId"),
 	projectController.restore,
 )
 projectRoutes.delete(
 	"/:workspaceId/projects/:projectId",
 	workspaceScope,
-	requireWorkspaceRole("owner"),
+	requireResourcePermission("project.delete", "project", "projectId"),
 	projectController.remove,
 )

@@ -43,6 +43,12 @@ import {
 	updateProjectSchema,
 } from "../modules/project/project.dto"
 import {
+	createRoleSchema,
+	listRolesQuerySchema,
+	setRolesSchema,
+	updateRoleSchema,
+} from "../modules/rbac/rbac.dto"
+import {
 	synthesizeSpeechSchema,
 	transcribeAttachmentSchema,
 } from "../modules/speech/speech.dto"
@@ -102,8 +108,13 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 	"PATCH /v1/workspaces/:workspaceId": {
 		summary: "Update workspace settings",
 		tags: ["Workspaces"],
-		access: "owner, admin",
+		access: "workspace.update",
 		body: updateWorkspaceSchema,
+	},
+	"GET /v1/workspaces/:workspaceId/permissions": {
+		summary: "What the caller may do in this workspace",
+		tags: ["Workspaces"],
+		access: "any member",
 	},
 	"GET /v1/workspaces/:workspaceId/members": {
 		summary: "List members",
@@ -114,31 +125,31 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 	"PATCH /v1/workspaces/:workspaceId/members/:memberId": {
 		summary: "Change a member's role",
 		tags: ["Workspaces"],
-		access: "owner, admin",
+		access: "member.update",
 		body: updateMemberRoleSchema,
 	},
 	"DELETE /v1/workspaces/:workspaceId/members/:memberId": {
 		summary: "Remove a member",
 		tags: ["Workspaces"],
-		access: "owner, admin",
+		access: "member.remove",
 		status: 204,
 	},
 	"GET /v1/workspaces/:workspaceId/invitations": {
 		summary: "List pending invitations",
 		tags: ["Workspaces"],
-		access: "owner, admin",
+		access: "invitation.read",
 	},
 	"POST /v1/workspaces/:workspaceId/invitations": {
 		summary: "Invite someone. Refused with SEAT_LIMIT_REACHED when the plan is full",
 		tags: ["Workspaces"],
-		access: "owner, admin",
+		access: "invitation.create",
 		body: inviteMemberSchema,
 		status: 201,
 	},
 	"DELETE /v1/workspaces/:workspaceId/invitations/:invitationId": {
 		summary: "Cancel an invitation",
 		tags: ["Workspaces"],
-		access: "owner, admin",
+		access: "invitation.revoke",
 		status: 204,
 	},
 
@@ -151,7 +162,7 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 	"POST /v1/workspaces/:workspaceId/projects": {
 		summary: "Create a project",
 		tags: ["Projects"],
-		access: "owner, admin, member",
+		access: "project.create",
 		body: createProjectSchema,
 		status: 201,
 	},
@@ -163,23 +174,23 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 	"PATCH /v1/workspaces/:workspaceId/projects/:projectId": {
 		summary: "Update a project",
 		tags: ["Projects"],
-		access: "owner, admin, member",
+		access: "project.update",
 		body: updateProjectSchema,
 	},
 	"POST /v1/workspaces/:workspaceId/projects/:projectId/archive": {
 		summary: "Archive a project (reversible, keeps usage history)",
 		tags: ["Projects"],
-		access: "owner, admin",
+		access: "project.archive",
 	},
 	"POST /v1/workspaces/:workspaceId/projects/:projectId/restore": {
 		summary: "Restore an archived project",
 		tags: ["Projects"],
-		access: "owner, admin",
+		access: "project.archive",
 	},
 	"DELETE /v1/workspaces/:workspaceId/projects/:projectId": {
 		summary: "Delete a project permanently. Must be archived first",
 		tags: ["Projects"],
-		access: "owner",
+		access: "project.delete",
 		status: 204,
 	},
 
@@ -191,32 +202,32 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 	"GET /v1/workspaces/:workspaceId/billing/transactions": {
 		summary: "Credit ledger",
 		tags: ["Billing"],
-		access: "owner, admin",
+		access: "transaction.read",
 		query: paginationQuerySchema,
 	},
 
 	"POST /v1/workspaces/:workspaceId/billing/checkout": {
 		summary: "Start Stripe checkout for a plan or a top-up pack",
 		tags: ["Billing"],
-		access: "owner, admin",
+		access: "billing.manage",
 		body: createCheckoutSchema,
 		status: 200,
 	},
 	"POST /v1/workspaces/:workspaceId/billing/portal": {
 		summary: "Open the Stripe billing portal (cards, invoices, cancellation)",
 		tags: ["Billing"],
-		access: "owner, admin",
+		access: "billing.manage",
 		status: 200,
 	},
 	"GET /v1/workspaces/:workspaceId/billing/auto-reload": {
 		summary: "Auto-reload settings and the last failure, if any",
 		tags: ["Billing"],
-		access: "owner, admin",
+		access: "billing.manage",
 	},
 	"PUT /v1/workspaces/:workspaceId/billing/auto-reload": {
 		summary: "Enable or change auto-reload. Requires a card already on file",
 		tags: ["Billing"],
-		access: "owner, admin",
+		access: "billing.manage",
 		body: updateAutoReloadSchema,
 	},
 
@@ -251,75 +262,75 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 	"PUT /v1/workspaces/:workspaceId/settings/models": {
 		summary: "Change the workspace's default chat or embedding model",
 		tags: ["Models"],
-		access: "owner, admin",
+		access: "model.manage",
 		body: updateModelSettingsSchema,
 	},
 
 	"GET /v1/admin/users": {
 		summary: "List all users",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.user.read",
 		query: adminListQuerySchema,
 	},
 	"GET /v1/admin/workspaces": {
 		summary: "List all workspaces with plan and balance",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.workspace.read",
 		query: adminListQuerySchema,
 	},
 	"GET /v1/admin/workspaces/:workspaceId": {
 		summary: "Workspace detail",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.workspace.read",
 	},
 	"POST /v1/admin/workspaces/:workspaceId/credits": {
 		summary: "Signed credit adjustment. Writes the ledger and the audit trail",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.credit.adjust",
 		body: adjustCreditsSchema,
 	},
 	"PUT /v1/admin/workspaces/:workspaceId/plan": {
 		summary: "Change a workspace's plan",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.workspace.manage",
 		body: setPlanSchema,
 	},
 	"GET /v1/admin/audit-log": {
 		summary: "Audit trail",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.audit.read",
 		query: paginationQuerySchema,
 	},
 
 	"GET /v1/admin/promo-codes": {
 		summary: "List promo codes, newest first",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.promo.read",
 		query: listPromoCodesQuerySchema,
 	},
 	"POST /v1/admin/promo-codes": {
 		summary: "Create a promo code",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.promo.manage",
 		body: createPromoCodeSchema,
 		status: 201,
 	},
 	"PATCH /v1/admin/promo-codes/:promoCodeId": {
 		summary: "Enable or disable a promo code — the only mutable field",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.promo.manage",
 		body: updatePromoCodeSchema,
 	},
 	"DELETE /v1/admin/promo-codes/:promoCodeId": {
 		summary: "Delete a code nobody redeemed. Refused with 409 once one has",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.promo.manage",
 		status: 204,
 	},
 	"GET /v1/admin/promo-codes/:promoCodeId/redemptions": {
 		summary: "Which workspaces redeemed a code",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.promo.read",
 		query: paginationQuerySchema,
 	},
 
@@ -339,7 +350,7 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary:
 			"Create a knowledge base. Its embedding model is frozen at creation — vectors from two models are not comparable",
 		tags: ["Knowledge"],
-		access: "owner, admin, member",
+		access: "knowledgeBase.create",
 		body: createKnowledgeBaseSchema,
 		status: 201,
 	},
@@ -352,13 +363,13 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary:
 			"Edit a knowledge base. Retrieval settings apply at once; chunking settings apply to documents re-indexed after the change",
 		tags: ["Knowledge"],
-		access: "owner, admin, member",
+		access: "knowledgeBase.update",
 		body: updateKnowledgeBaseSchema,
 	},
 	"DELETE /v1/workspaces/:workspaceId/knowledge-bases/:baseId": {
 		summary: "Delete it and everything derived from it — vectors, objects and rows",
 		tags: ["Knowledge"],
-		access: "owner, admin",
+		access: "knowledgeBase.delete",
 		status: 204,
 	},
 	"GET /v1/workspaces/:workspaceId/knowledge-bases/:baseId/documents": {
@@ -371,7 +382,7 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary:
 			"Upload a document as multipart/form-data under `file`, optionally with `parserId` and a JSON `parserConfig` overriding the base's. Returns the pending row; indexing runs in the worker",
 		tags: ["Knowledge"],
-		access: "owner, admin, member",
+		access: "document.create",
 		status: 201,
 	},
 	"GET /v1/workspaces/:workspaceId/documents/:documentId": {
@@ -400,19 +411,19 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary:
 			"Queue the document again, optionally changing its chunking method. Ranges whose settings did not change are reused rather than re-embedded, so only what changed costs credits",
 		tags: ["Knowledge"],
-		access: "owner, admin, member",
+		access: "document.update",
 		body: reindexDocumentSchema,
 	},
 	"POST /v1/workspaces/:workspaceId/documents/:documentId/cancel": {
 		summary:
 			"Ask the worker to stop between stages. Passages already indexed are kept — they were paid for",
 		tags: ["Knowledge"],
-		access: "owner, admin, member",
+		access: "document.update",
 	},
 	"DELETE /v1/workspaces/:workspaceId/documents/:documentId": {
 		summary: "Delete a document, its chunks, its vectors and its stored file",
 		tags: ["Knowledge"],
-		access: "owner, admin, member",
+		access: "document.delete",
 		status: 204,
 	},
 
@@ -425,7 +436,7 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 	"POST /v1/workspaces/:workspaceId/conversations": {
 		summary: "Start a conversation. A null knowledgeBaseId answers without retrieval",
 		tags: ["Chat"],
-		access: "owner, admin, member",
+		access: "conversation.create",
 		body: createConversationSchema,
 		status: 201,
 	},
@@ -437,13 +448,13 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 	"PATCH /v1/workspaces/:workspaceId/conversations/:conversationId": {
 		summary: "Rename a conversation or point it at another knowledge base",
 		tags: ["Chat"],
-		access: "owner, admin, member",
+		access: "conversation.update",
 		body: updateConversationSchema,
 	},
 	"DELETE /v1/workspaces/:workspaceId/conversations/:conversationId": {
 		summary: "Delete a conversation and its messages",
 		tags: ["Chat"],
-		access: "owner, admin, member",
+		access: "conversation.delete",
 		status: 204,
 	},
 	"GET /v1/workspaces/:workspaceId/conversations/:conversationId/messages": {
@@ -455,7 +466,7 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 	"POST /v1/workspaces/:workspaceId/conversations/:conversationId/messages": {
 		summary: "Ask a question and wait for the whole answer",
 		tags: ["Chat"],
-		access: "owner, admin, member",
+		access: "chat.send",
 		body: sendMessageSchema,
 		status: 201,
 	},
@@ -463,21 +474,21 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary:
 			"The same turn over SSE. Events: citations, delta, done, error. Refusals arrive as a status code before the stream opens",
 		tags: ["Chat"],
-		access: "owner, admin, member",
+		access: "chat.send",
 		body: sendMessageSchema,
 	},
 	"POST /v1/workspaces/:workspaceId/conversations/:conversationId/messages/:messageId/stop": {
 		summary:
 			"Stop a turn that is generating. The partial answer is saved and the stream ends with its normal `done` frame, so the text already on screen survives",
 		tags: ["Chat"],
-		access: "owner, admin, member",
+		access: "chat.send",
 	},
 
 	"POST /v1/workspaces/:workspaceId/attachments": {
 		summary:
 			"Upload an image or a recording as multipart/form-data under `file`. The kind and the stored type are sniffed from the bytes, not taken from the declared ones, and the row comes back unbound until a message is sent with it",
 		tags: ["Attachments"],
-		access: "owner, admin, member",
+		access: "attachment.create",
 		status: 201,
 	},
 	"GET /v1/workspaces/:workspaceId/attachments/:attachmentId": {
@@ -495,7 +506,7 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary:
 			"Discard an attachment that has not been sent yet. Refused with a conflict once it belongs to a message — delete the message instead",
 		tags: ["Attachments"],
-		access: "owner, admin, member",
+		access: "attachment.delete",
 		status: 204,
 	},
 
@@ -503,14 +514,14 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary:
 			"Transcribe a stored recording. The transcript is written onto the attachment, so a repeat call returns it with `cached: true` and charges nothing. Runs inside the request, and is charged on the duration the provider reports",
 		tags: ["Speech"],
-		access: "owner, admin, member",
+		access: "speech.transcribe",
 		body: transcribeAttachmentSchema,
 	},
 	"POST /v1/workspaces/:workspaceId/speech": {
 		summary:
 			"Speak a piece of text and return the audio bytes under the format's own content type. Charged per input character",
 		tags: ["Speech"],
-		access: "owner, admin, member",
+		access: "speech.synthesize",
 		body: synthesizeSpeechSchema,
 	},
 
@@ -528,7 +539,7 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 	"POST /v1/workspaces/:workspaceId/agents": {
 		summary: "Create an agent. Version 1 is written with it and the agent starts as a draft",
 		tags: ["Agents"],
-		access: "owner, admin, member",
+		access: "agent.create",
 		body: createAgentSchema,
 		status: 201,
 	},
@@ -541,13 +552,13 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary:
 			"Rename an agent, move it between projects, or change its status. The configuration is republished, never patched",
 		tags: ["Agents"],
-		access: "owner, admin, member",
+		access: "agent.update",
 		body: updateAgentSchema,
 	},
 	"DELETE /v1/workspaces/:workspaceId/agents/:agentId": {
 		summary: "Delete an agent, its versions and its run history",
 		tags: ["Agents"],
-		access: "owner, admin, member",
+		access: "agent.delete",
 		status: 204,
 	},
 	"GET /v1/workspaces/:workspaceId/agents/:agentId/versions": {
@@ -559,7 +570,7 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary:
 			"Publish a new immutable version and make it current. Runs already in flight keep the version they started on",
 		tags: ["Agents"],
-		access: "owner, admin, member",
+		access: "agent.publish",
 		body: agentConfigSchema,
 		status: 201,
 	},
@@ -573,14 +584,14 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary:
 			"Run the agent over SSE. Events: phase, citations, warning, delta, done, error. Refusals arrive as a status code before the stream opens",
 		tags: ["Agents"],
-		access: "owner, admin, member",
+		access: "agent.run",
 		body: runAgentSchema,
 	},
 	"POST /v1/workspaces/:workspaceId/agents/:agentId/runs/queue": {
 		summary:
 			"Queue the run for the worker instead of streaming it. Returns a run id straight away; the steps and the answer are read back from the run, which the worker writes as it goes",
 		tags: ["Agents"],
-		access: "owner, admin, member",
+		access: "agent.run",
 		body: runAgentSchema,
 		status: 202,
 	},
@@ -599,20 +610,20 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary:
 			"Answer what a paused flow asked for and carry on, over SSE on the same run",
 		tags: ["Agents"],
-		access: "owner, admin, member",
+		access: "agentRun.control",
 		body: resumeRunSchema,
 	},
 	"POST /v1/workspaces/:workspaceId/agent-runs/:runId/stop": {
 		summary:
 			"Stop or cancel a run. It ends at its next node boundary, keeps what it has and can be retried from there; a run still queued is cancelled outright",
 		tags: ["Agents"],
-		access: "owner, admin, member",
+		access: "agentRun.control",
 	},
 	"POST /v1/workspaces/:workspaceId/agent-runs/:runId/retry": {
 		summary:
 			"Run a failed or stopped run again on the queue, from its last checkpoint. Work the first attempt was already billed for is not charged again",
 		tags: ["Agents"],
-		access: "owner, admin, member",
+		access: "agentRun.control",
 		status: 202,
 	},
 
@@ -632,130 +643,197 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		summary:
 			"Create or replace one of the workspace's connections. The secret is encrypted at rest and never returned; omitting it keeps the stored one",
 		tags: ["Connections"],
-		access: "owner, admin",
+		access: "connection.manage",
 		body: saveIntegrationSchema,
 	},
 	"DELETE /v1/workspaces/:workspaceId/connections/:connectionId": {
 		summary: "Delete one of the workspace's connections. Agents naming it then refuse",
 		tags: ["Connections"],
-		access: "owner, admin",
+		access: "connection.manage",
 		status: 204,
 	},
 	"POST /v1/workspaces/:workspaceId/connections/:connectionId/check": {
 		summary:
 			"One live call proving the workspace's own connection works. The outcome is kept on the row; a platform-wide connection is the administrator's to test",
 		tags: ["Connections"],
-		access: "owner, admin",
+		access: "connection.manage",
 	},
 
 	"GET /v1/admin/integrations": {
 		summary:
 			"Platform-wide connections every workspace may use, with their allowlists (secrets masked). A workspace's own live under /v1/workspaces/:workspaceId/connections",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.integration.read",
 	},
 	"GET /v1/admin/integrations/:integrationId": {
 		summary: "One integration",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.integration.read",
 	},
 	"PUT /v1/admin/integrations/:integrationId": {
 		summary:
 			"Create or replace an integration. Omitting `secret` keeps the stored key, so editing an allowlist is not a key rotation",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.integration.manage",
 		body: saveIntegrationSchema,
 	},
 	"DELETE /v1/admin/integrations/:integrationId": {
 		summary: "Delete an integration. Agents naming it then refuse",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.integration.manage",
 		status: 204,
 	},
 	"POST /v1/admin/integrations/:integrationId/check": {
 		summary: "One live call proving the connection works. The outcome is kept on the row",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.integration.manage",
 	},
 	"GET /v1/admin/providers": {
 		summary: "Providers, credential state (masked) and the merged model catalogue",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.provider.read",
 	},
 	"PUT /v1/admin/providers/:provider/credential": {
 		summary: "Store a provider API key. Encrypted at rest and never returned",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.provider.manage",
 		body: saveCredentialSchema,
 	},
 	"DELETE /v1/admin/providers/:provider/credential": {
 		summary: "Remove a provider API key",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.provider.manage",
 	},
 	"POST /v1/admin/providers/:provider/check": {
 		summary: "Call the provider with the stored key. Answers 200 with ok=false on rejection",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.provider.manage",
 	},
 	"GET /v1/admin/speech": {
 		summary:
 			"Transcription and synthesis configuration, and which source each half resolves from. The key is never returned — only its masked hint",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.speech.read",
 	},
 	"PUT /v1/admin/speech/:capability": {
 		summary:
 			"Configure one half — `stt` or `tts` — against any OpenAI-audio-compatible host. Omitting apiKey keeps the stored one",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.speech.manage",
 		body: saveSpeechEndpointSchema,
 	},
 	"DELETE /v1/admin/speech/:capability": {
 		summary: "Clear one half, falling back to whatever the environment configures",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.speech.manage",
 	},
 	"POST /v1/admin/speech/:capability/check": {
 		summary:
 			"Transcribe a second of generated silence, or synthesise a short phrase. Answers 200 with ok=false on rejection",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.speech.manage",
 	},
 	"POST /v1/admin/providers/:provider/models/import": {
 		summary:
 			"Import the provider's own catalogue, priced from its own API. Offered only where a provider publishes prices machine-readably — OpenRouter today. Upserts, never deletes, so re-running it refreshes prices",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.model.manage",
 	},
 	"POST /v1/admin/models": {
 		summary: "Add a model or replace its definition",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.model.manage",
 		body: upsertModelSchema,
 		status: 201,
 	},
 	"PATCH /v1/admin/providers/:provider/models/:model": {
 		summary: "Change one field of a model, built-in models included",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.model.manage",
 		body: patchModelSchema,
 	},
 	"DELETE /v1/admin/providers/:provider/models/:model": {
 		summary: "Drop the stored row. A built-in model reverts to its compiled definition",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.model.manage",
 	},
 	"GET /v1/admin/settings/models": {
 		summary: "Platform default chat and embedding models",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.model.read",
 	},
 	"PUT /v1/admin/settings/models": {
 		summary: "Change the platform defaults",
 		tags: ["Admin"],
-		access: "platform admin",
+		access: "admin.model.manage",
 		body: setPlatformDefaultsSchema,
+	},
+	"GET /v1/admin/settings/model-access": {
+		summary: "Which models each plan may offer",
+		tags: ["Admin"],
+		access: "admin.model.read",
+	},
+	"PUT /v1/admin/settings/model-access/:plan": {
+		summary: "Set which models one plan may offer",
+		tags: ["Admin"],
+		access: "admin.model.manage",
+	},
+	"GET /v1/admin/permissions": {
+		summary: "The permission catalogue this release checks",
+		tags: ["Admin"],
+		access: "admin.role.read",
+	},
+	"GET /v1/admin/roles": {
+		summary: "List roles and what each one may do",
+		tags: ["Admin"],
+		access: "admin.role.read",
+		query: listRolesQuerySchema,
+	},
+	"POST /v1/admin/roles": {
+		summary: "Create a role",
+		tags: ["Admin"],
+		access: "admin.role.manage",
+		body: createRoleSchema,
+		status: 201,
+	},
+	"GET /v1/admin/roles/:roleId": {
+		summary: "Read one role",
+		tags: ["Admin"],
+		access: "admin.role.read",
+	},
+	"PATCH /v1/admin/roles/:roleId": {
+		summary: "Rename a role or change what it may do",
+		tags: ["Admin"],
+		access: "admin.role.manage",
+		body: updateRoleSchema,
+	},
+	"DELETE /v1/admin/roles/:roleId": {
+		summary: "Delete a role nobody holds",
+		tags: ["Admin"],
+		access: "admin.role.manage",
+		status: 204,
+	},
+	"GET /v1/admin/users/:userId/platform-roles": {
+		summary: "The console roles somebody holds",
+		tags: ["Admin"],
+		access: "admin.role.read",
+	},
+	"PUT /v1/admin/users/:userId/platform-roles": {
+		summary: "Set the console roles somebody holds",
+		tags: ["Admin"],
+		access: "admin.role.manage",
+		body: setRolesSchema,
+	},
+	"GET /v1/admin/workspaces/:workspaceId/members/:memberId/roles": {
+		summary: "The roles a workspace member holds",
+		tags: ["Admin"],
+		access: "admin.role.read",
+	},
+	"PUT /v1/admin/workspaces/:workspaceId/members/:memberId/roles": {
+		summary: "Set the roles a workspace member holds",
+		tags: ["Admin"],
+		access: "admin.role.manage",
+		body: setRolesSchema,
 	},
 
 	"GET /v1/workspaces/:workspaceId/billing/promo-codes": {
@@ -766,7 +844,7 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 	"POST /v1/workspaces/:workspaceId/billing/promo-codes/redeem": {
 		summary: "Redeem a promo code for this workspace",
 		tags: ["Billing"],
-		access: "owner, admin",
+		access: "promo.redeem",
 		body: redeemPromoCodeSchema,
 	},
 }
