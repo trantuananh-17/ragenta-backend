@@ -58,6 +58,21 @@ agentRoutes.post(
 	requirePermission("agent.create"),
 	agentController.create,
 )
+
+/**
+ * Draft a flow from a sentence. Registered before `/agents/:agentId` and writes
+ * nothing — the canvas holds what comes back until a version is published.
+ *
+ * `agent.update` rather than `agent.create`: the canvas it fills belongs to an
+ * agent being edited as often as to one being made, and both roles that may do
+ * either hold this.
+ */
+agentRoutes.post(
+	"/:workspaceId/agents/generate-graph",
+	workspaceScope,
+	requirePermission("agent.update"),
+	agentController.generateGraph,
+)
 agentRoutes.get(
 	"/:workspaceId/agents/:agentId",
 	workspaceScope,

@@ -1,4 +1,4 @@
-import { chatCapableClient } from "../../ai/clients"
+import { chatCapableClient, providerClient } from "../../ai/clients"
 import { resolveRerankModel } from "../../ai/rerank"
 import { db } from "../../db/client"
 import type { DbExecutor } from "../../db/client"
@@ -13,6 +13,9 @@ import { modelService } from "../model/model.service"
 import { enqueueAgentRun } from "../../queue/agent.jobs"
 import { visibilityFor } from "../rbac/visibility"
 import type { MembershipRow } from "../workspace/workspace.repository"
+import { requireCredential } from "../../ai/catalogue"
+import { buildGraphMessages, parseGeneratedGraph } from "./graph/generate"
+import { usageService } from "../usage/usage.service"
 import { agentRepository } from "./agent.repository"
 import { RETRYABLE_STATUSES, nextSeq, readCheckpoint } from "./checkpoint"
 import { validateGraph } from "./graph/types"
@@ -341,6 +344,53 @@ export const agentService = {
 	 * the agent's pointer — which is the whole reason the configuration is
 	 * versioned rather than edited in place.
 	 */
+	/**
+	 * Draft a flow from a sentence.
+	 *
+	 * Returns a graph or the reasons it is not one; it writes nothing. What comes
+	 * back is a proposal for the canvas, and it is saved only when somebody
+	 * publishes a version — so a bad draft costs a click to discard rather than a
+	 * version to roll back.
+	 *
+	 * The call is charged like any other model call. Generating a query from a
+	 * prompt in `datasource.service` is not, which is a hole rather than a
+	 * precedent: a model call nobody pays for is a way to spend the deployment's
+	 * money without touching a balance.
+	 */
+	async generateGraph(workspaceId: string, prompt: string, actorId: string) {
+		const selection = (await modelService.getSettings(workspaceId)).chat
+		const client = providerClient(selection.provider)
+		if (!client?.chat) {
+			throw new ValidationError(
+				`This deployment cannot draft a flow with ${selection.provider}.`,
+			)
+		}
+
+		const credential = await requireCredential(selection.provider)
+
+		const answer = await client.chat(credential, {
+			model: selection.model,
+			messages: buildGraphMessages(prompt),
+			temperature: 0,
+			maxTokens: 2_000,
+		})
+
+		await usageService.recordAndCharge({
+			workspaceId,
+			userId: actorId,
+			operation: "agent",
+			provider: selection.provider,
+			model: selection.model,
+			inputTokens: answer.usage?.inputTokens ?? 0,
+			outputTokens: answer.usage?.outputTokens ?? 0,
+			reference: `agent-graph:${newId()}`,
+		})
+
+		const result = parseGeneratedGraph(answer.text)
+
+		return result
+	},
+
 	async publishVersion(
 		workspaceId: string,
 		agentId: string,

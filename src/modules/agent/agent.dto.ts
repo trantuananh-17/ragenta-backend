@@ -169,3 +169,13 @@ export type CreateAgentInput = z.infer<typeof createAgentSchema>
 export type UpdateAgentInput = z.infer<typeof updateAgentSchema>
 export type RunAgentInput = z.infer<typeof runAgentSchema>
 export type ResumeRunInput = z.infer<typeof resumeRunSchema>
+
+/**
+ * The sentence a flow is drafted from. Long enough to describe a job, short
+ * enough that a pasted document does not become the prompt.
+ */
+export const generateGraphSchema = z.object({
+	prompt: z.string().trim().min(10).max(2_000),
+})
+
+export type GenerateGraphInput = z.infer<typeof generateGraphSchema>

@@ -9,6 +9,7 @@ import {
 	agentConfigSchema,
 	createAgentSchema,
 	createFromTemplateSchema,
+	generateGraphSchema,
 	resumeRunSchema,
 	runAgentSchema,
 	updateAgentSchema,
@@ -890,6 +891,12 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		tags: ["Admin"],
 		access: "admin.role.manage",
 		body: setRolesSchema,
+	},
+	"POST /v1/workspaces/:workspaceId/agents/generate-graph": {
+		summary: "Draft a flow graph from a description. Returns a proposal; saves nothing",
+		tags: ["Agents"],
+		access: "agent.update",
+		body: generateGraphSchema,
 	},
 	"GET /v1/workspaces/:workspaceId/widgets/:widgetId/usage": {
 		summary: "What one embedded widget has answered, and what it has spent",

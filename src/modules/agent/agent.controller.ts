@@ -9,6 +9,7 @@ import {
 	compareVersionsSchema,
 	createAgentSchema,
 	createFromTemplateSchema,
+	generateGraphSchema,
 	resumeRunSchema,
 	runAgentSchema,
 	updateAgentSchema,
@@ -186,6 +187,19 @@ export const agentController = {
 	 * The trigger follows the same signal, so a run a program started is no longer
 	 * recorded as one somebody clicked.
 	 */
+	/**
+	 * Drafts a flow and returns it. Writes nothing: the canvas holds the proposal
+	 * until somebody publishes a version, so a bad draft costs a click.
+	 */
+	async generateGraph(c: AppContext) {
+		const user = requireUser(c)
+		const membership = requireMembership(c)
+		const { prompt } = generateGraphSchema.parse(await c.req.json())
+		return c.json(
+			await agentService.generateGraph(membership.organizationId, prompt, user.id),
+		)
+	},
+
 	async queueRun(c: AppContext) {
 		const membership = requireMembership(c)
 		const apiKeyId = c.get("apiKeyId") ?? null
