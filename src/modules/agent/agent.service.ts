@@ -630,6 +630,8 @@ export const agentService = {
 		 * were asleep for.
 		 */
 		trigger: "manual" | "api" | "schedule" | "webhook" = "manual",
+		/** The key a program called with, so its spend can be told from a person's. */
+		apiKeyId: string | null = null,
 	) {
 		const agent = await agentRepository.findById(workspaceId, agentId)
 		if (!agent) throw new NotFoundError("Agent")
@@ -648,6 +650,7 @@ export const agentService = {
 			projectId: agent.projectId,
 			userId: actorId,
 			trigger,
+			apiKeyId,
 			status: "pending",
 			input: { input: input.input, documentIds: input.documentIds ?? [] },
 		})

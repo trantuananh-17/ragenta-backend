@@ -242,6 +242,21 @@ export const agentRun = pgTable(
 		 */
 		widgetId: text("widget_id"),
 		/**
+		 * The API key that asked for this run, when a program did.
+		 *
+		 * A plain column for the same reason `widget_id` is one: the run is a record
+		 * of what happened and has to outlive the key being revoked. Attribution
+		 * that disappeared when somebody rotated a credential would be worth less
+		 * than none, because the total would quietly stop adding up.
+		 *
+		 * On the run rather than on `usage_ledger`, because an API key can only
+		 * cause an agent run — that is the whole of what the developer API writes
+		 * (ADR-062) — so this is where the question "which key spent this" is
+		 * actually answerable, and the ledger keeps the one reference format every
+		 * other charge uses.
+		 */
+		apiKeyId: text("api_key_id"),
+		/**
 		 * pending | running | awaiting_input | succeeded | failed | stopped.
 		 *
 		 * `pending` is a run that exists but that no process has claimed —

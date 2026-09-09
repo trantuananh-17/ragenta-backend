@@ -173,16 +173,31 @@ export const agentController = {
 	 * Queue the run for the worker instead of streaming it. 202 and a run id: the
 	 * client polls the run and its steps, which the runner writes as it goes.
 	 */
+	/**
+	 * Queues a run for a person **or** for an API key.
+	 *
+	 * `requireUser` is deliberately not called: the developer API resolves a key to
+	 * a membership and never to a session, so demanding a session user here made
+	 * the only write endpoint an API key can reach answer 401 to every valid key.
+	 * The actor falls back to the membership's own user — the person whose key it
+	 * is — which is what `attachApiKey` documents wanting so the ledger and the
+	 * audit trail carry an actor rather than a null meaning "we do not know".
+	 *
+	 * The trigger follows the same signal, so a run a program started is no longer
+	 * recorded as one somebody clicked.
+	 */
 	async queueRun(c: AppContext) {
-		const user = requireUser(c)
 		const membership = requireMembership(c)
+		const apiKeyId = c.get("apiKeyId") ?? null
 		const input = runAgentSchema.parse(await c.req.json())
 		return c.json(
 			await agentService.queueRun(
 				membership.organizationId,
 				requireParam(c, "agentId"),
 				input,
-				user.id,
+				c.get("user")?.id ?? membership.userId,
+				apiKeyId ? "api" : "manual",
+				apiKeyId,
 			),
 			202,
 		)

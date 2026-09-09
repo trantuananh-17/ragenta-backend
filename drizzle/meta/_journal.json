@@ -225,6 +225,13 @@
       "when": 1788933562204,
       "tag": "0031_worried_bill_hollister",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1788937888176,
+      "tag": "0032_classy_luckman",
+      "breakpoints": true
     }
   ]
 }
