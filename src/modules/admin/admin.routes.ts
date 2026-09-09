@@ -269,6 +269,11 @@ adminRoutes.put(
  * need the margin (ADR-051).
  */
 adminRoutes.get(
+	"/payments",
+	requirePlatformPermission("admin.usage.read"),
+	revenueController.payments,
+)
+adminRoutes.get(
 	"/revenue",
 	requirePlatformPermission("admin.usage.read"),
 	revenueController.overview,

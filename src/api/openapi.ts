@@ -901,6 +901,11 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		tags: ["Billing"],
 		access: "billing.manage",
 	},
+	"GET /v1/admin/payments": {
+		summary: "Every payment across every workspace",
+		tags: ["Admin"],
+		access: "admin.usage.read",
+	},
 	"GET /v1/admin/revenue": {
 		summary: "Subscription run rate, top-ups collected, provider cost and the margin",
 		tags: ["Admin"],

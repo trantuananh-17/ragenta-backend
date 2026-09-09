@@ -1,6 +1,7 @@
 import type { PlatformUsageQuery } from "../usage/platform-usage.dto"
 import { isPlanName, monthlyPriceUsd, topupPackByCredits } from "./plans"
 import type { PlanName } from "./plans"
+import { paymentRepository } from "./payment.repository"
 import { revenueRepository } from "./revenue.repository"
 
 /**
@@ -27,16 +28,18 @@ function toNumber(value: string | null | undefined): number {
 
 export const revenueService = {
 	async overview({ from, to, limit }: PlatformUsageQuery) {
-		const [subscriptions, topups, cost, costByWorkspace, daily] = await Promise.all([
+		const [subscriptions, topups, banked, cost, costByWorkspace, daily] = await Promise.all([
 			revenueRepository.activeSubscriptions(),
 			revenueRepository.topupsWithin(from, to),
+			paymentRepository.collectedWithin(from, to),
 			revenueRepository.costWithin(from, to),
 			revenueRepository.costByWorkspace(from, to, limit),
 			revenueRepository.dailyCost(from, to),
 		])
 
 		const runRate = summariseRunRate(subscriptions)
-		const collected = summariseTopups(topups)
+		const ledger = summariseTopups(topups)
+		const collected = summariseCollected(banked, ledger)
 		const costUsd = toNumber(cost?.usd)
 
 		return {
@@ -97,6 +100,41 @@ function summariseRunRate(rows: SubscriptionRow[]) {
 		unpricedWorkspaces,
 		workspaces: rows.length,
 		byPlan: [...byPlan.values()].sort((a, b) => b.usd - a.usd),
+	}
+}
+
+/**
+ * What was actually collected, from the payment rows themselves.
+ *
+ * This used to be inferred: top-up credits were matched against the price of the
+ * pack that grants that many, because no table recorded a payment. That guess is
+ * gone now the `payment` table exists — a real amount beats an amount worked
+ * backwards from what it bought, and it is the only way a *subscription* charge
+ * could ever be counted at all.
+ *
+ * The credit figures from the ledger travel alongside rather than being dropped:
+ * a range holding top-up credits but no payment row is a range from before
+ * payments were recorded, and saying so is better than reporting the revenue as
+ * zero without explanation.
+ */
+function summariseCollected(
+	rows: { kind: string; usd: string; payments: number }[],
+	ledger: { credits: number; purchases: number; unpricedCredits: number },
+) {
+	const byKind = (kind: string) => rows.find((row) => row.kind === kind)
+
+	const subscriptionUsd = Number(byKind("subscription")?.usd ?? 0)
+	const topupUsd = Number(byKind("topup")?.usd ?? 0)
+	const payments = rows.reduce((total, row) => total + row.payments, 0)
+
+	return {
+		usd: subscriptionUsd + topupUsd,
+		subscriptionUsd,
+		topupUsd,
+		payments,
+		credits: ledger.credits,
+		purchases: ledger.purchases,
+		unpricedCredits: ledger.unpricedCredits,
 	}
 }
 
