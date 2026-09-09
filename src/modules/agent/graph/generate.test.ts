@@ -121,6 +121,17 @@ describe("buildGraphMessages", () => {
 		expect(system.content).toContain("loop")
 	})
 
+	it("names the tools an agent node can reach", () => {
+		const [system] = buildGraphMessages("read my mail")
+		if (!system) throw new Error("no system message")
+		// The first draft of this prompt listed node types and nothing else, so a
+		// model asked to read email refused: no *node type* reads email, and it had
+		// not been told that `gmail_search` exists as a tool on an `agent` node.
+		expect(system.content).toContain("gmail_search")
+		expect(system.content).toContain("slack_post")
+		expect(system.content).toContain("web_search")
+	})
+
 	it("carries the request as the user turn", () => {
 		const [, user] = buildGraphMessages("read my mail")
 		if (!user) throw new Error("no user message")

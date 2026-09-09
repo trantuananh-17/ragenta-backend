@@ -1,3 +1,4 @@
+import { TOOL_CATALOGUE, TOOL_IDS } from "../tools/catalogue"
 import { NODE_TYPES, agentGraphSchema, validateGraph } from "./types"
 import type { AgentGraph } from "./types"
 import { unfence } from "./node-params"
@@ -30,10 +31,11 @@ import { unfence } from "./node-params"
  */
 const NODE_GUIDE: Record<string, string> = {
 	begin: "The entry point. Exactly one, always called `begin`. No params.",
-	llm: "Ask a model. params: { prompt: string, system?: string }",
+	llm: "Ask a model once, with no tools at all. params: { prompt: string, system?: string }",
 	knowledge_search:
 		"Search the workspace's knowledge bases. params: { query: string, topK?: number }",
-	agent: "Call another agent in this workspace.",
+	agent:
+		"A tool-using step: the model may call the tools you list, several times, until it has an answer. This is the ONLY node that can reach anything outside the flow — mail, the web, Slack, a spreadsheet. params: { prompt: string, system?: string, tools: string[], maxRounds?: number }",
 	categorize:
 		"Sort text into one of a fixed set. params: { input: string, categories: string }",
 	switch: "Take a different branch depending on a value.",
@@ -52,6 +54,15 @@ const NODE_GUIDE: Record<string, string> = {
 export function buildGraphMessages(prompt: string) {
 	const catalogue = NODE_TYPES.map((type) => `- ${type}: ${NODE_GUIDE[type] ?? ""}`).join("\n")
 
+	/**
+	 * Generated from the tool catalogue rather than typed out, so a tool added to
+	 * the product is never one the model is not told about — and, more to the
+	 * point, never one it concludes does not exist. Without this list a request to
+	 * read email is refused as impossible, because no *node type* reads email:
+	 * `gmail_search` is a tool, and tools live inside an `agent` node.
+	 */
+	const tools = TOOL_IDS.map((id) => `- ${id}: ${TOOL_CATALOGUE[id].description}`).join("\n")
+
 	return [
 		{
 			role: "system" as const,
@@ -64,6 +75,11 @@ export function buildGraphMessages(prompt: string) {
 				"The node types you may use, and nothing else:",
 				catalogue,
 				"",
+				"Tools an `agent` node may name in its `tools` parameter. A capability here is",
+				"NOT a node type — to read mail, search the web or post to Slack, add an",
+				"`agent` node and list the tool:",
+				tools,
+				"",
 				"Rules:",
 				"- Exactly one node with id `begin`, of type `begin`. Every other node must be reachable from it.",
 				"- `upstream` and `downstream` must name ids that exist in this same object, and must agree with each other.",
@@ -72,7 +88,8 @@ export function buildGraphMessages(prompt: string) {
 				"- `{{sys.input}}` is the run's input. `{{some_node.text}}` is what that node produced.",
 				"- Leave `params` as {} for any node whose parameters you are not sure of. A human will fill them in. Do not invent file paths, URLs, ids or credentials.",
 				"- Prefer few nodes. Four that work beat ten that need untangling.",
-				'- If the request cannot be built from these node types, answer {"error":"..."} naming what is missing. Never substitute a node type that does not exist.',
+				'- If the request cannot be built from these node types, answer {"error":"..."} naming what is missing. Never substitute a node type or a tool that does not exist.',
+				"- Before refusing, check the tool list. Most capabilities outside the flow are tools on an `agent` node, not node types of their own.",
 			].join("\n"),
 		},
 		{
