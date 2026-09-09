@@ -37,9 +37,11 @@ const NODE_GUIDE: Record<string, string> = {
 	agent:
 		"A tool-using step: the model may call the tools you list, several times, until it has an answer. This is the ONLY node that can reach anything outside the flow — mail, the web, Slack, a spreadsheet. params: { prompt: string, system?: string, tools: string[], maxRounds?: number }",
 	categorize:
-		"Sort text into one of a fixed set. params: { input: string, categories: string }",
-	switch: "Take a different branch depending on a value.",
-	user_input: "Pause and ask the person for more before carrying on.",
+		"Sort text into one of a fixed set, then follow that category's branch. params: { input: string, categories: [{ name: string, description?: string, to: nodeId }] } — two to eight of them, and `to` names the node that category leads to.",
+	switch:
+		"Follow the first case that matches. params: { cases: [{ left: string, operator: \"equals\"|\"not_equals\"|\"contains\"|\"empty\"|\"not_empty\", right?: string, to: nodeId }], otherwise?: nodeId[] }",
+	user_input:
+		"Pause and ask the person for more before carrying on. params: { prompt: string, fields: string[] }",
 	message: "Emit text to the caller. params: { text: string }",
 	http: "Call an external HTTP API.",
 	ocr: "Read text out of an image or a PDF.",
@@ -87,6 +89,8 @@ export function buildGraphMessages(prompt: string) {
 				"- Node ids are short, lower_snake_case, and never `sys` or `loop`.",
 				"- `{{sys.input}}` is the run's input. `{{some_node.text}}` is what that node produced.",
 				"- Leave `params` as {} for any node whose parameters you are not sure of. A human will fill them in. Do not invent file paths, URLs, ids or credentials.",
+				"- A parameter documented as a list must be a list, never a sentence describing one. `categorize.categories` and `switch.cases` are the ones that matter: a string there draws nothing on the canvas.",
+				"- A branching node routes through its own `to` fields, so leave its `downstream` empty.",
 				"- Prefer few nodes. Four that work beat ten that need untangling.",
 				'- If the request cannot be built from these node types, answer {"error":"..."} naming what is missing. Never substitute a node type or a tool that does not exist.',
 				"- Before refusing, check the tool list. Most capabilities outside the flow are tools on an `agent` node, not node types of their own.",

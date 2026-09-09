@@ -13,6 +13,7 @@ import { logger } from "../../shared/logger"
 import { decryptSecret, encryptSecret } from "../../shared/crypto"
 import { auditService } from "../audit/audit.service"
 import { modelService } from "../model/model.service"
+import { usageService } from "../usage/usage.service"
 import { datasourceRepository } from "./datasource.repository"
 import type { DataQueryRow, DataSourceRow } from "./datasource.repository"
 import type { GenerateQueryInput, SaveDataSourceInput, SaveQueryInput } from "./datasource.dto"
@@ -324,10 +325,24 @@ export const datasourceService = {
 			maxTokens: 800,
 		})
 
+		// Charged like every other model call. This ran free until now, which made
+		// it a way to spend the deployment's money at a provider without any
+		// workspace balance moving — the one path through this product where a
+		// token was bought and nobody was billed for it (ADR-015).
+		await usageService.recordAndCharge({
+			workspaceId,
+			userId: actorId,
+			operation: "agent",
+			provider: selection.provider,
+			model: selection.model,
+			inputTokens: answer.usage?.inputTokens ?? 0,
+			outputTokens: answer.usage?.outputTokens ?? 0,
+			reference: `datasource-query:${newId()}`,
+		})
+
 		const proposal = parseProposal(answer.text)
 
 		log.info("datasource.query_generated", { sourceId: source.id, name: proposal.name })
-		void actorId
 
 		return { proposal, usage: answer.usage }
 	},
