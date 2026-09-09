@@ -567,6 +567,13 @@ export const agentRunner = {
 				status: input.ok ? "succeeded" : "failed",
 				input: input.payload,
 				output: input.output,
+				// A tool that fails answers with a sentence — "Gmail API is not enabled
+				// for this project" — and it lands in `output`. Left out of `error`,
+				// the timeline read "this step failed and recorded no reason" while the
+				// reason sat one toggle below it, which sent people looking for a bug
+				// in the wrong place. Anything reading steps gets it now, not only this
+				// screen.
+				error: input.ok ? null : reasonFrom(input.output),
 				finishedAt: new Date(),
 			})
 			seq += 1
@@ -1263,4 +1270,21 @@ ${event.call.arguments.slice(0, 800)}`,
 			rerank,
 		}
 	},
+}
+
+/**
+ * The sentence a failed tool left behind.
+ *
+ * Tools report a failure as ordinary content rather than by throwing — the model
+ * is meant to read it and try something else — so the reason is a field in the
+ * output rather than an exception. `preview` is what the renderers write and
+ * `content` is what a raw tool returns; neither is guaranteed, and a step with
+ * genuinely nothing to say keeps its null.
+ */
+function reasonFrom(output: Record<string, unknown>): string | null {
+	for (const key of ["preview", "content", "error", "message"]) {
+		const value = output[key]
+		if (typeof value === "string" && value.trim()) return value.trim().slice(0, 2_000)
+	}
+	return null
 }
