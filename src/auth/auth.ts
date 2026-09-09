@@ -104,6 +104,17 @@ export const auth = betterAuth({
 
 	emailAndPassword: {
 		enabled: true,
+		/**
+		 * The signup trial grant is one per person — `signup:user:<id>` in
+		 * billingService.provisionWorkspace — so an address nobody has to own makes
+		 * it free to farm: register, spend the credits, register again. Proving the
+		 * mailbox answers is what puts a cost back on that.
+		 *
+		 * Deployment consequence: every account already stored with
+		 * `email_verified = false` is locked out the moment this ships. Verify the
+		 * existing rows in each environment *before* releasing it.
+		 */
+		requireEmailVerification: true,
 		sendResetPassword: async ({ user: recipient, url }) => {
 			await sendPasswordResetEmail(recipient.email, url)
 		},
@@ -135,6 +146,17 @@ export const auth = betterAuth({
 				google: {
 					clientId: env.auth.google.clientId,
 					clientSecret: env.auth.google.clientSecret,
+					/**
+					 * Read from the provider's own options, not from `emailAndPassword` —
+					 * Better Auth keeps the two settings apart, so requiring verification
+					 * for passwords leaves this path open unless it is said twice.
+					 *
+					 * Google's `email_verified` claim is true for an ordinary account, so
+					 * this changes nothing for real users. It closes the case where it is
+					 * false, which would otherwise be a session, a workspace and a trial
+					 * grant on an address nobody proved they own.
+					 */
+					requireEmailVerification: true,
 				},
 			}
 		: undefined,

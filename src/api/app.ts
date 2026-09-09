@@ -118,6 +118,11 @@ export function createApp() {
 		"/v1/auth/request-password-reset",
 		"/v1/auth/forget-password",
 		"/v1/auth/reset-password",
+		// Now that an unverified account cannot sign in, this is the recovery path
+		// everyone locked out will reach for — and it is an unauthenticated endpoint
+		// that sends mail to any address given to it. Left off this list it had only
+		// the global limiter between it and being used as a mail cannon.
+		"/v1/auth/send-verification-email",
 	]) {
 		app.use(path, credentialAttempts)
 	}
