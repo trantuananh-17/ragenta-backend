@@ -30,6 +30,13 @@ function within(from: Date, to: Date) {
  * same reason; formatting it is the client's job.
  */
 const creditSum = sql<string>`coalesce(sum(${usageLedger.credits}), 0)::text`
+/**
+ * What the providers charged us over the same rows — cost of goods, beside the
+ * credits that are revenue. Summed from the frozen per-row figure rather than
+ * converted from credits here, so a change to the credit baseline cannot restate
+ * a month that has already been reported.
+ */
+const costSum = sql<string>`coalesce(sum(${usageLedger.costUsd}), 0)::text`
 const calls = sql<number>`count(*)::int`
 const inputTokens = sql<number>`coalesce(sum(${usageLedger.inputTokens}), 0)::bigint::text`
 const outputTokens = sql<number>`coalesce(sum(${usageLedger.outputTokens}), 0)::bigint::text`
@@ -46,6 +53,7 @@ export const platformUsageRepository = {
 				outputTokens,
 				embeddingTokens,
 				credits: creditSum,
+				costUsd: costSum,
 				workspaces: sql<number>`count(distinct ${usageLedger.organizationId})::int`,
 			})
 			.from(usageLedger)
@@ -63,6 +71,7 @@ export const platformUsageRepository = {
 				outputTokens,
 				embeddingTokens,
 				credits: creditSum,
+				costUsd: costSum,
 			})
 			.from(usageLedger)
 			.where(within(from, to))
@@ -82,6 +91,7 @@ export const platformUsageRepository = {
 				outputTokens,
 				embeddingTokens,
 				credits: creditSum,
+				costUsd: costSum,
 			})
 			.from(usageLedger)
 			.leftJoin(organization, sql`${organization.id} = ${usageLedger.organizationId}`)
@@ -100,6 +110,7 @@ export const platformUsageRepository = {
 				outputTokens,
 				embeddingTokens,
 				credits: creditSum,
+				costUsd: costSum,
 			})
 			.from(usageLedger)
 			.where(within(from, to))
@@ -139,6 +150,7 @@ export const platformUsageRepository = {
 				outputTokens,
 				embeddingTokens,
 				credits: creditSum,
+				costUsd: costSum,
 				workspaces: sql<number>`count(distinct ${usageLedger.organizationId})::int`,
 				models: sql<number>`count(distinct (${usageLedger.provider} || '/' || ${usageLedger.model}))::int`,
 			})

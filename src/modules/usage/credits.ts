@@ -19,6 +19,22 @@ export const BASELINE_USD_PER_MILLION = 3
 export interface PricedUsage {
 	credits: number
 	pricingVersion: string
+	/**
+	 * What the provider charges us for this call, in USD.
+	 *
+	 * Carried alongside the credits rather than derived from them later. Credits
+	 * are a ratio against `BASELINE_USD_PER_MILLION`, so reading dollars back out
+	 * of a stored credit amount is only correct while that constant has never
+	 * moved — and the whole point of freezing a priced row is that a later change
+	 * cannot restate it (ADR-013). Cost of goods is a number worth being able to
+	 * defend a year from now.
+	 */
+	usd: number
+}
+
+/** Ledger scale for money is numeric(16,8); round to it at the source. */
+export function toStoredUsd(usd: number): number {
+	return Math.round(usd * 100_000_000) / 100_000_000
 }
 
 /**
@@ -68,5 +84,5 @@ export function priceSpeechUsage(units: SpeechUnits): PricedUsage {
 		((units.seconds ?? 0) / 60) * SPEECH_TO_TEXT_USD_PER_MINUTE +
 		((units.characters ?? 0) / 1_000_000) * TEXT_TO_SPEECH_USD_PER_MILLION_CHARACTERS
 
-	return { credits: toCredits(usd), pricingVersion: PRICING_VERSION }
+	return { credits: toCredits(usd), pricingVersion: PRICING_VERSION, usd: toStoredUsd(usd) }
 }

@@ -61,6 +61,19 @@ export const usageLedger = pgTable(
 		pricingVersion: text("pricing_version").notNull(),
 
 		/**
+		 * What this call cost us at the provider, in USD, frozen the same way
+		 * `credits` is.
+		 *
+		 * Not derived from `credits` on read, deliberately. That conversion runs
+		 * through `BASELINE_USD_PER_MILLION`, a constant in code: the day it moves,
+		 * every historical dollar figure would move with it, which is exactly what
+		 * freezing a priced row exists to prevent (ADR-013). Credits are what the
+		 * customer was charged; this is what we paid, and the two have to be able
+		 * to disagree over time.
+		 */
+		costUsd: numeric("cost_usd", { precision: 16, scale: 8 }).default("0").notNull(),
+
+		/**
 		 * How long the provider took, in milliseconds.
 		 *
 		 * Nullable because rows written before this column existed have no honest

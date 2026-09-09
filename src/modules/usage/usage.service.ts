@@ -73,7 +73,7 @@ export const usageService = {
 	 * refusing up front.
 	 */
 	async recordAndCharge(input: RecordUsageInput) {
-		const { credits, pricingVersion } = input.speechUnits
+		const { credits, pricingVersion, usd } = input.speechUnits
 			? priceSpeechUsage(input.speechUnits)
 			: await priceUsage(input.provider, input.model, input)
 
@@ -104,6 +104,7 @@ export const usageService = {
 					embeddingTokens: input.embeddingTokens ?? 0,
 					credits: credits.toFixed(4),
 					pricingVersion,
+					costUsd: usd.toFixed(8),
 					durationMs: input.durationMs ?? null,
 					reference: input.reference,
 					metadata: input.metadata ?? {},

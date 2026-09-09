@@ -1,10 +1,10 @@
 import { findCatalogueModel } from "../../ai/catalogue"
-import { BASELINE_USD_PER_MILLION, PRICING_VERSION, toCredits } from "./credits"
+import { BASELINE_USD_PER_MILLION, PRICING_VERSION, toCredits, toStoredUsd } from "./credits"
 import type { PricedUsage } from "./credits"
 
 // Re-exported so every caller keeps importing pricing, and only the tests need
 // to know the arithmetic moved to a module that loads without an environment.
-export { PRICING_VERSION, priceSpeechUsage, toCredits } from "./credits"
+export { PRICING_VERSION, priceSpeechUsage, toCredits, toStoredUsd } from "./credits"
 export type { PricedUsage, SpeechUnits } from "./credits"
 import type { ModelTier } from "../billing/plans"
 
@@ -56,7 +56,7 @@ export async function priceUsage(
 			(tokens.embeddingTokens ?? 0) * rates.embedding) /
 		1_000_000
 
-	return { credits: toCredits(usd), pricingVersion: PRICING_VERSION }
+	return { credits: toCredits(usd), pricingVersion: PRICING_VERSION, usd: toStoredUsd(usd) }
 }
 
 export async function modelTier(provider: string, model: string): Promise<ModelTier> {

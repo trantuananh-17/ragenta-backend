@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { PRICING_VERSION, priceSpeechUsage } from "./credits"
+import { BASELINE_USD_PER_MILLION, PRICING_VERSION, priceSpeechUsage } from "./credits"
 
 /**
  * Speech pricing arithmetic, which is the part of this feature that costs real
@@ -17,6 +17,30 @@ import { PRICING_VERSION, priceSpeechUsage } from "./credits"
  * A change to either list price changes these expectations, which is the point:
  * a rate cannot move without a test saying so.
  */
+
+describe("the dollars beside the credits", () => {
+	/**
+	 * The two numbers agree today because both come from the same USD figure.
+	 * They are stored separately so they may stop agreeing: the day
+	 * `BASELINE_USD_PER_MILLION` moves, every row written before it keeps the
+	 * dollars it really cost, and deriving them from credits would silently
+	 * restate all of them.
+	 */
+	it("reports the provider price the credits were converted from", () => {
+		expect(priceSpeechUsage({ seconds: 60 }).usd).toBe(0.006)
+		expect(priceSpeechUsage({ characters: 1_000 }).usd).toBe(0.015)
+	})
+
+	it("agrees with the credit conversion while the baseline is unchanged", () => {
+		const priced = priceSpeechUsage({ seconds: 300 })
+		expect((priced.credits * BASELINE_USD_PER_MILLION) / 1_000_000).toBeCloseTo(priced.usd, 8)
+	})
+
+	it("keeps a sub-cent call off zero at the ledger's scale", () => {
+		// numeric(16,8): a single second is $0.0001, which eight decimals hold.
+		expect(priceSpeechUsage({ seconds: 1 }).usd).toBe(0.0001)
+	})
+})
 
 describe("priceSpeechUsage", () => {
 	it("charges a minute of transcription at the baseline-anchored rate", () => {
