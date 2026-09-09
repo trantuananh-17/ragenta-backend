@@ -875,6 +875,11 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		access: "admin.role.manage",
 		body: setRolesSchema,
 	},
+	"GET /v1/admin/workspaces/:workspaceId/members": {
+		summary: "The members of one workspace, with the account behind each",
+		tags: ["Admin"],
+		access: "admin.workspace.read",
+	},
 	"GET /v1/admin/workspaces/:workspaceId/members/:memberId/roles": {
 		summary: "The roles a workspace member holds",
 		tags: ["Admin"],

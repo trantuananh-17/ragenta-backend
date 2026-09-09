@@ -1,4 +1,4 @@
-import { count, desc, eq, ilike, or } from "drizzle-orm"
+import { asc, count, desc, eq, ilike, or } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
 
 import { db } from "../../db/client"
@@ -62,6 +62,27 @@ export const adminRepository = {
 
 		const [totals] = await db.select({ value: count() }).from(organization).where(where)
 		return { items, total: totals?.value ?? 0 }
+	},
+
+	/**
+	 * A workspace's members, with the account behind each one. The console needs
+	 * the `member.id` rather than the user's, because a membership is what holds
+	 * workspace roles — the same person in two workspaces is two rows here.
+	 */
+	async listWorkspaceMembers(workspaceId: string) {
+		return db
+			.select({
+				id: member.id,
+				userId: member.userId,
+				name: user.name,
+				email: user.email,
+				role: member.role,
+				createdAt: member.createdAt,
+			})
+			.from(member)
+			.innerJoin(user, eq(user.id, member.userId))
+			.where(eq(member.organizationId, workspaceId))
+			.orderBy(asc(member.createdAt))
 	},
 
 	async countWorkspaceMembers(workspaceId: string) {

@@ -245,6 +245,11 @@ adminRoutes.put(
 // The admin API could read a workspace but not administer its members. It can
 // now change what one may do, which is the point of the whole model.
 adminRoutes.get(
+	"/workspaces/:workspaceId/members",
+	requirePlatformPermission("admin.workspace.read"),
+	adminController.listWorkspaceMembers,
+)
+adminRoutes.get(
 	"/workspaces/:workspaceId/members/:memberId/roles",
 	requirePlatformPermission("admin.role.read"),
 	rbacController.listMemberRoles,

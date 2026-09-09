@@ -23,6 +23,10 @@ export const adminController = {
 		return c.json(await adminService.getWorkspace(requireParam(c, "workspaceId")))
 	},
 
+	async listWorkspaceMembers(c: AppContext) {
+		return c.json(await adminService.listWorkspaceMembers(requireParam(c, "workspaceId")))
+	},
+
 	async adjustCredits(c: AppContext) {
 		const actor = requireUser(c)
 		const input = adjustCreditsSchema.parse(await c.req.json())

@@ -32,6 +32,13 @@ export const adminService = {
 		return { workspace, billing, members }
 	},
 
+	async listWorkspaceMembers(workspaceId: string) {
+		const workspace = await workspaceRepository.findById(workspaceId)
+		if (!workspace) throw new NotFoundError("Workspace")
+
+		return { members: await adminRepository.listWorkspaceMembers(workspaceId) }
+	},
+
 	/**
 	 * Manual credit movement. Both directions go through the normal ledger paths
 	 * so an adjustment is indistinguishable from any other movement when the
