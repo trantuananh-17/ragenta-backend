@@ -891,6 +891,11 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		access: "admin.role.manage",
 		body: setRolesSchema,
 	},
+	"GET /v1/admin/revenue": {
+		summary: "Subscription run rate, top-ups collected, provider cost and the margin",
+		tags: ["Admin"],
+		access: "admin.usage.read",
+	},
 	"GET /v1/admin/usage": {
 		summary: "Platform spend: totals, by model, by operation, by workspace, by day",
 		tags: ["Admin"],

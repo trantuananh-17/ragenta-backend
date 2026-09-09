@@ -178,5 +178,36 @@ export function creditsForPeriod(plan: PlanName, seats: number): number | null {
 	return null
 }
 
+/**
+ * What one workspace on this plan bills in a month, given its occupied seats.
+ *
+ * `null` means the plan carries no list price — enterprise is invoiced by hand,
+ * and inventing a number for it would put a figure nobody agreed to into a
+ * revenue total. The caller reports those workspaces separately rather than as
+ * zero, because "we do not know" and "it is free" are different answers.
+ *
+ * Here rather than in the revenue service because it is the same kind of rule as
+ * `creditsForPeriod` — a commercial constant the pricing table already carries —
+ * and this file is the one place both the seat cap and the invoice read it from.
+ */
+export function monthlyPriceUsd(plan: PlanName, seats: number): number | null {
+	const { price } = planLimits(plan)
+
+	if (price.monthlyUsd !== null) {
+		const included = price.includedSeats ?? 0
+		const extra = Math.max(0, seats - included) * (price.extraSeatUsd ?? 0)
+		return price.monthlyUsd + extra
+	}
+
+	if (price.perSeatUsd !== null) return price.perSeatUsd * Math.max(1, seats)
+
+	return null
+}
+
+/** The list price of a top-up pack, found by the credits it grants. */
+export function topupPackByCredits(credits: number) {
+	return Object.entries(TOPUP_PACKS).find(([, pack]) => pack.credits === credits)?.[1]
+}
+
 /** Subscription statuses that entitle a workspace to its plan's limits. */
 export const ACTIVE_SUBSCRIPTION_STATUSES = ["active", "trialing"] as const

@@ -9,7 +9,9 @@ import {
 	creditsForPeriod,
 	isPlanName,
 	isTopupPackId,
+	monthlyPriceUsd,
 	planLimits,
+	topupPackByCredits,
 } from "./plans"
 
 /**
@@ -158,5 +160,50 @@ describe("isTopupPackId", () => {
 		expect(isTopupPackId("100m")).toBe(false)
 		expect(isTopupPackId("")).toBe(false)
 		expect(isTopupPackId("1M")).toBe(false)
+	})
+})
+
+/**
+ * What a workspace bills in a month. These are the numbers the revenue report
+ * adds up, so a plan whose price moves without this test moving is a plan that
+ * silently restates the run rate.
+ */
+describe("monthlyPriceUsd", () => {
+	it("bills free at nothing, however many seats it somehow has", () => {
+		expect(monthlyPriceUsd("free", 1)).toBe(0)
+		expect(monthlyPriceUsd("free", 4)).toBe(0)
+	})
+
+	it("bills pro per occupied seat", () => {
+		expect(monthlyPriceUsd("pro", 1)).toBe(29)
+		expect(monthlyPriceUsd("pro", 4)).toBe(116)
+	})
+
+	it("counts an empty workspace as one seat rather than none", () => {
+		// A subscription with no members is still being charged for one.
+		expect(monthlyPriceUsd("pro", 0)).toBe(29)
+	})
+
+	it("bills team flat up to its included seats, then per extra seat", () => {
+		expect(monthlyPriceUsd("team", 3)).toBe(99)
+		expect(monthlyPriceUsd("team", 5)).toBe(99)
+		expect(monthlyPriceUsd("team", 7)).toBe(99 + 2 * 19)
+	})
+
+	it("refuses to price enterprise", () => {
+		// Invoiced by hand. A zero here would quietly report a paying customer as
+		// contributing nothing.
+		expect(monthlyPriceUsd("enterprise", 40)).toBeNull()
+	})
+})
+
+describe("topupPackByCredits", () => {
+	it("finds the pack a credit amount was bought as", () => {
+		expect(topupPackByCredits(1_000_000)?.priceUsd).toBe(39)
+		expect(topupPackByCredits(15_000_000)?.priceUsd).toBe(450)
+	})
+
+	it("does not price an amount no pack sells", () => {
+		expect(topupPackByCredits(50_000)).toBeUndefined()
 	})
 })

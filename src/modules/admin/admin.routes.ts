@@ -6,6 +6,7 @@ import {
 } from "../../api/middleware/require-admin"
 import { requireAuth } from "../../api/middleware/session"
 import type { AppEnv } from "../../api/types"
+import { revenueController } from "../billing/revenue.controller"
 import { promoController } from "../promo/promo.controller"
 import { integrationController } from "../integration/integration.controller"
 import { providerController } from "../provider/provider.controller"
@@ -258,6 +259,19 @@ adminRoutes.put(
 	"/workspaces/:workspaceId/members/:memberId/roles",
 	requirePlatformPermission("admin.role.manage"),
 	rbacController.setMemberRoles,
+)
+
+/**
+ * What the deployment earns against what it spends.
+ *
+ * Behind `admin.usage.read` like the spend report beside it: `finance` holds it
+ * and `support` deliberately does not — reproducing a customer's problem does not
+ * need the margin (ADR-051).
+ */
+adminRoutes.get(
+	"/revenue",
+	requirePlatformPermission("admin.usage.read"),
+	revenueController.overview,
 )
 
 // What the platform has spent, and on which model. Cross-tenant by definition,
