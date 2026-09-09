@@ -8,6 +8,7 @@ import { page } from "../../shared/pagination"
 import { auditService } from "../audit/audit.service"
 import { workspaceRepository } from "../workspace/workspace.repository"
 import { billingRepository } from "./billing.repository"
+import { paymentRepository } from "./payment.repository"
 import {
 	ACTIVE_SUBSCRIPTION_STATUSES,
 	FREE_MONTHLY_CREDITS,
@@ -124,11 +125,12 @@ export const billingService = {
 	},
 
 	async getSummary(workspaceId: string) {
-		const [plan, balance, members, pendingInvitations] = await Promise.all([
+		const [plan, balance, members, pendingInvitations, current] = await Promise.all([
 			this.getPlan(workspaceId),
 			billingRepository.findBalance(workspaceId),
 			workspaceRepository.countMembers(workspaceId),
 			workspaceRepository.countPendingInvitations(workspaceId),
+			billingRepository.findSubscription(workspaceId),
 		])
 		if (!balance) throw new NotFoundError("Credit balance")
 
@@ -149,7 +151,31 @@ export const billingService = {
 				used: members + pendingInvitations,
 				limit: limits.seatLimit,
 			},
+			/**
+			 * When the plan renews, and whether it will.
+			 *
+			 * These three came back from Stripe and were written to the subscription
+			 * row from the first release, and nothing ever read them out again — so
+			 * "when does my plan renew" and "did my cancellation take" had no answer
+			 * anywhere in the product.
+			 *
+			 * `cancelAtPeriodEnd` is the difference between a date to look forward to
+			 * and a deadline, so it travels beside the date rather than being
+			 * inferred from the status.
+			 */
+			subscription: {
+				status: current?.status ?? "incomplete",
+				periodEnd: current?.periodEnd ?? null,
+				cancelAtPeriodEnd: current?.cancelAtPeriodEnd ?? false,
+				billingInterval: current?.billingInterval ?? null,
+				seats: current?.seats ?? null,
+			},
 		}
+	},
+
+	async listPayments(workspaceId: string, query: PaginationQuery) {
+		const { items, total } = await paymentRepository.listForWorkspace(workspaceId, query)
+		return page(items, total, query)
 	},
 
 	async listTransactions(workspaceId: string, query: PaginationQuery) {

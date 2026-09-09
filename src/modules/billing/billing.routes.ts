@@ -25,6 +25,16 @@ billingRoutes.get(
 	billingController.transactions,
 )
 
+// What was actually paid. Behind `billing.manage` rather than `transaction.read`:
+// an invoice carries a real amount and a link to a hosted receipt, which is a
+// narrower audience than the credit ledger every administrator reads.
+billingRoutes.get(
+	"/:workspaceId/billing/payments",
+	workspaceScope,
+	requirePermission("billing.manage"),
+	billingController.payments,
+)
+
 // Anything that can spend the workspace's money is owner or admin only.
 billingRoutes.post(
 	"/:workspaceId/billing/checkout",

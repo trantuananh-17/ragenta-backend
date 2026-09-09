@@ -28,6 +28,18 @@ export const billingController = {
 		return c.json(await billingService.listTransactions(membership.organizationId, query))
 	},
 
+	/**
+	 * The invoices, beside the ledger rather than inside it. A credit movement and
+	 * a payment are different facts — one is what may be spent, the other is what
+	 * was paid for it — and a table that mixed them would have two "amount"
+	 * columns meaning different units.
+	 */
+	async payments(c: AppContext) {
+		const membership = requireMembership(c)
+		const query = paginationQuerySchema.parse(c.req.query())
+		return c.json(await billingService.listPayments(membership.organizationId, query))
+	},
+
 	async createCheckout(c: AppContext) {
 		assertPaymentsEnabled()
 		const user = requireUser(c)

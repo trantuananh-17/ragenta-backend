@@ -138,6 +138,20 @@ export const billingRepository = {
 		return rows[0]
 	},
 
+	/**
+	 * An invoice names a customer and, for a subscription charge, a subscription.
+	 * The subscription is the sharper key; this covers the invoice that carries
+	 * only the customer.
+	 */
+	async findByExternalCustomerId(externalId: string, executor: DbExecutor = db) {
+		const rows = await executor
+			.select()
+			.from(subscription)
+			.where(eq(subscription.externalCustomerId, externalId))
+			.limit(1)
+		return rows[0]
+	},
+
 	// ── Auto-reload ────────────────────────────────────────────────────────────
 
 	async findPreferences(workspaceId: string, executor: DbExecutor = db) {

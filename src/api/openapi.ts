@@ -896,6 +896,11 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		tags: ["Agents"],
 		access: "widget.read",
 	},
+	"GET /v1/workspaces/:workspaceId/billing/payments": {
+		summary: "Invoices and top-up purchases this workspace has been charged for",
+		tags: ["Billing"],
+		access: "billing.manage",
+	},
 	"GET /v1/admin/revenue": {
 		summary: "Subscription run rate, top-ups collected, provider cost and the margin",
 		tags: ["Admin"],

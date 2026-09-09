@@ -3,11 +3,13 @@ import type Stripe from "stripe"
 import { env } from "../../config/env"
 import { requireStripe, stripePriceId } from "../../payments/stripe"
 import { NotFoundError, ValidationError } from "../../shared/errors"
+import { newId } from "../../shared/id"
 import { logger } from "../../shared/logger"
 import { auditService } from "../audit/audit.service"
 import { workspaceRepository } from "../workspace/workspace.repository"
 import { billingRepository } from "./billing.repository"
 import { billingService } from "./billing.service"
+import { paymentRepository } from "./payment.repository"
 import { PLAN_FREE, TOPUP_PACKS, planLimits } from "./plans"
 import type { PlanName, TopupPackId } from "./plans"
 
@@ -208,6 +210,10 @@ export const stripeService = {
 			case "customer.subscription.deleted":
 				await this.onSubscriptionChanged(event.data.object)
 				break
+			case "invoice.paid":
+			case "invoice.payment_failed":
+				await this.onInvoice(event.data.object, event.type === "invoice.paid" ? "paid" : "failed")
+				break
 			case "payment_intent.succeeded":
 				await this.onAutoReloadSucceeded(event.data.object)
 				break
@@ -269,11 +275,65 @@ export const stripeService = {
 			reason: `Top-up pack ${session.metadata.pack ?? "unknown"}`,
 		})
 
+		// The money beside the credits. The grant above is what they may spend; this
+		// is what they paid for it, and until now that number lived only in Stripe.
+		await paymentRepository.record({
+			id: newId(),
+			organizationId: workspaceId,
+			kind: "topup",
+			status: "paid",
+			amountUsd: ((session.amount_total ?? 0) / 100).toFixed(2),
+			currency: session.currency ?? "usd",
+			description: `Top-up pack ${session.metadata.pack ?? "unknown"}`,
+			externalId: session.id,
+		})
+
 		log.info("stripe.topup.applied", {
 			workspaceId,
 			credits,
 			alreadyApplied: result.alreadyApplied,
 		})
+	},
+
+	/**
+	 * Record a subscription charge, succeeded or not.
+	 *
+	 * A failure is written rather than ignored: it is the reason a workspace is
+	 * about to lose its plan, and a billing screen that shows only successes makes
+	 * that look like it happened for no reason.
+	 *
+	 * The invoice id is the idempotency key, so Stripe redelivering the same event
+	 * updates one row instead of adding another — and the failure that precedes a
+	 * successful retry becomes that same row turning `paid`.
+	 */
+	async onInvoice(invoice: Stripe.Invoice, status: "paid" | "failed") {
+		const workspaceId = await workspaceForInvoice(invoice)
+		if (!workspaceId) {
+			log.warn("stripe.invoice.no_workspace", { invoiceId: invoice.id })
+			return
+		}
+
+		const line = invoice.lines?.data?.[0]
+		// `amount_paid` is zero on a failure, and the customer needs to see what was
+		// attempted rather than a row saying nothing was owed.
+		const cents = status === "paid" ? invoice.amount_paid : invoice.amount_due
+
+		await paymentRepository.record({
+			id: newId(),
+			organizationId: workspaceId,
+			kind: "subscription",
+			status,
+			amountUsd: (cents / 100).toFixed(2),
+			currency: invoice.currency ?? "usd",
+			description: line?.description ?? "Subscription",
+			externalId: invoice.id ?? `invoice:${workspaceId}:${invoice.created}`,
+			hostedInvoiceUrl: invoice.hosted_invoice_url ?? null,
+			invoicePdfUrl: invoice.invoice_pdf ?? null,
+			periodStart: line?.period?.start ? new Date(line.period.start * 1000) : null,
+			periodEnd: line?.period?.end ? new Date(line.period.end * 1000) : null,
+		})
+
+		log.info("stripe.invoice.recorded", { workspaceId, status, invoiceId: invoice.id })
 	},
 
 	async saveDefaultPaymentMethod(session: Stripe.Checkout.Session) {
@@ -385,6 +445,17 @@ export const stripeService = {
 			reason: "Auto-reload",
 		})
 
+		await paymentRepository.record({
+			id: newId(),
+			organizationId: workspaceId,
+			kind: "topup",
+			status: "paid",
+			amountUsd: (intent.amount / 100).toFixed(2),
+			currency: intent.currency ?? "usd",
+			description: `Auto-reload ${intent.metadata.pack ?? ""}`.trim(),
+			externalId: intent.id,
+		})
+
 		await billingRepository.releaseAutoReloadLock(workspaceId)
 		log.info("stripe.auto_topup.applied", { workspaceId, credits })
 	},
@@ -402,4 +473,23 @@ export const stripeService = {
 		await billingRepository.releaseAutoReloadLock(workspaceId, code)
 		log.warn("stripe.auto_topup.failed", { workspaceId, code })
 	},
+}
+
+/**
+ * Which workspace an invoice belongs to.
+ *
+ * Resolved through the customer rather than the subscription. One workspace has
+ * at most one subscription row — `subscription_organizationId_uidx` enforces it —
+ * and the customer id is on it from the moment `ensureCustomer` ran, so this
+ * answers for a one-off invoice as well as a recurring one. It also avoids
+ * reading a field the Stripe SDK has moved between API versions.
+ *
+ * A miss is logged rather than guessed at: attributing money to the wrong
+ * workspace is worse than not recording it.
+ */
+async function workspaceForInvoice(invoice: Stripe.Invoice): Promise<string | undefined> {
+	const customerId = typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id
+	if (!customerId) return undefined
+
+	return (await billingRepository.findByExternalCustomerId(customerId))?.organizationId
 }
