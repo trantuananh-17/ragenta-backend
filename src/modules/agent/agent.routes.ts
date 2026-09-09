@@ -211,6 +211,12 @@ agentRoutes.put(
 	requirePermission("widget.manage"),
 	widgetController.save,
 )
+agentRoutes.get(
+	"/:workspaceId/widgets/:widgetId/usage",
+	workspaceScope,
+	requirePermission("widget.read"),
+	widgetController.usage,
+)
 agentRoutes.delete(
 	"/:workspaceId/widgets/:widgetId",
 	workspaceScope,

@@ -891,6 +891,11 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		access: "admin.role.manage",
 		body: setRolesSchema,
 	},
+	"GET /v1/workspaces/:workspaceId/widgets/:widgetId/usage": {
+		summary: "What one embedded widget has answered, and what it has spent",
+		tags: ["Agents"],
+		access: "widget.read",
+	},
 	"GET /v1/admin/revenue": {
 		summary: "Subscription run rate, top-ups collected, provider cost and the margin",
 		tags: ["Admin"],

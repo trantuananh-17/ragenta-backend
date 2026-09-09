@@ -200,6 +200,41 @@ export const widgetService = {
 		}
 	},
 
+	/**
+	 * What one widget has been doing, for the workspace that owns it.
+	 *
+	 * Credits only — never the provider cost. What the workspace was charged is
+	 * theirs to see; what we paid the provider is our margin, and it belongs on
+	 * the admin console's revenue report and nowhere a customer can read it.
+	 *
+	 * Today's spend against the ceiling travels with it, because "why did my chat
+	 * stop answering" is the question this screen exists to answer and the ceiling
+	 * is the most common reason.
+	 */
+	async usage(workspaceId: string, widgetId: string, from: Date, to: Date, limit: number) {
+		const widget = await widgetRepository.findScoped(workspaceId, widgetId)
+		if (!widget) throw new NotFoundError("Widget")
+
+		const [totals, daily, recent, spentToday] = await Promise.all([
+			widgetRepository.usageTotals(widgetId, from, to),
+			widgetRepository.dailyUsage(widgetId, from, to),
+			widgetRepository.recentRuns(widgetId, from, to, limit),
+			widgetRepository.spentToday(widgetId),
+		])
+
+		return {
+			range: { from: from.toISOString(), to: to.toISOString() },
+			widget: { id: widget.id, name: widget.name, enabled: widget.enabled },
+			today: {
+				spent: spentToday,
+				ceiling: Number(widget.dailyCreditCeiling),
+			},
+			totals,
+			daily,
+			recent,
+		}
+	},
+
 	/** What the embed page needs to render before anybody types anything. */
 	toEmbedConfig(widget: ChatWidgetRow) {
 		return {

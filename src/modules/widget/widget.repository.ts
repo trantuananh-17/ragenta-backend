@@ -1,10 +1,19 @@
-import { and, asc, eq, gte, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gte, lt, sql } from "drizzle-orm"
 
 import { db } from "../../db/client"
 import type { DbExecutor } from "../../db/client"
 import { agentRun, chatWidget, usageLedger } from "../../db/schema"
 
 export type ChatWidgetRow = typeof chatWidget.$inferSelect
+
+/** Half-open, `[from, to)`, so a day is never counted at both ends. */
+function inRange(widgetId: string, from: Date, to: Date) {
+	return and(
+		eq(agentRun.widgetId, widgetId),
+		gte(agentRun.createdAt, from),
+		lt(agentRun.createdAt, to),
+	)
+}
 
 export const widgetRepository = {
 	async list(workspaceId: string, executor: DbExecutor = db): Promise<ChatWidgetRow[]> {
@@ -59,6 +68,75 @@ export const widgetRepository = {
 
 	async remove(widgetId: string, executor: DbExecutor = db): Promise<void> {
 		await executor.delete(chatWidget).where(eq(chatWidget.id, widgetId))
+	},
+
+	/**
+	 * What one widget has answered over a range.
+	 *
+	 * Aggregated from `agent_run` rather than from the ledger: a widget turn is one
+	 * run, the run already carries the credits it was charged, and counting runs is
+	 * the only honest way to say "messages" — the ledger holds a row per provider
+	 * call, which is several per answer once retrieval and the model are both
+	 * charged.
+	 *
+	 * Duration comes from the run's own timestamps and is null while it is still
+	 * going, which `avg` skips rather than counting as zero.
+	 */
+	async usageTotals(widgetId: string, from: Date, to: Date, executor: DbExecutor = db) {
+		const rows = await executor
+			.select({
+				messages: sql<number>`count(*)::int`,
+				succeeded: sql<number>`count(*) filter (where ${agentRun.status} = 'succeeded')::int`,
+				failed: sql<number>`count(*) filter (where ${agentRun.status} = 'failed')::int`,
+				credits: sql<string>`coalesce(sum(${agentRun.credits}), 0)::text`,
+				avgDurationMs: sql<
+					number | null
+				>`avg(extract(epoch from (${agentRun.finishedAt} - ${agentRun.startedAt})) * 1000)::int`,
+			})
+			.from(agentRun)
+			.where(inRange(widgetId, from, to))
+
+		return rows[0]
+	},
+
+	async dailyUsage(widgetId: string, from: Date, to: Date, executor: DbExecutor = db) {
+		return executor
+			.select({
+				day: sql<string>`to_char(date_trunc('day', ${agentRun.createdAt}), 'YYYY-MM-DD')`,
+				messages: sql<number>`count(*)::int`,
+				credits: sql<string>`coalesce(sum(${agentRun.credits}), 0)::text`,
+			})
+			.from(agentRun)
+			.where(inRange(widgetId, from, to))
+			.groupBy(sql`date_trunc('day', ${agentRun.createdAt})`)
+			.orderBy(sql`date_trunc('day', ${agentRun.createdAt})`)
+	},
+
+	/**
+	 * The last conversations, for the log.
+	 *
+	 * Both sides are truncated in SQL. A visitor can paste a page into a chat box
+	 * and an answer can be long; a screen that lists thirty of them should not
+	 * carry the whole of any of them across the wire to render two lines.
+	 */
+	async recentRuns(widgetId: string, from: Date, to: Date, limit: number, executor: DbExecutor = db) {
+		return executor
+			.select({
+				id: agentRun.id,
+				status: agentRun.status,
+				createdAt: agentRun.createdAt,
+				credits: agentRun.credits,
+				error: agentRun.error,
+				question: sql<string | null>`left(${agentRun.input} ->> 'input', 280)`,
+				answer: sql<string | null>`left(${agentRun.output}, 280)`,
+				durationMs: sql<
+					number | null
+				>`(extract(epoch from (${agentRun.finishedAt} - ${agentRun.startedAt})) * 1000)::int`,
+			})
+			.from(agentRun)
+			.where(inRange(widgetId, from, to))
+			.orderBy(desc(agentRun.createdAt))
+			.limit(limit)
 	},
 
 	/**
