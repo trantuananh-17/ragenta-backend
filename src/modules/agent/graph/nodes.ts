@@ -172,7 +172,13 @@ const llmNode: NodeImplementation = {
 					inputTokens: event.charge.inputTokens,
 					outputTokens: event.charge.outputTokens,
 					estimated: event.charge.estimated,
-					output: { characters: event.charge.text.length },
+					// The prompt this step actually ran, after its templates resolved.
+					// Without it the timeline says "recorded nothing about what it was
+					// given", and a node answering the wrong thing cannot be told from a
+					// node given the wrong thing — which is the first question anybody
+					// asks about a flow that produced nonsense.
+					payload: { prompt: prompt.slice(0, 2_000), system: system.slice(0, 500) },
+					output: { characters: event.charge.text.length, text: event.charge.text.slice(0, 2_000) },
 				})
 			} else if (event.type === "finished") text = event.text
 		}
@@ -306,7 +312,11 @@ const agentNode: NodeImplementation = {
 					inputTokens: event.charge.inputTokens,
 					outputTokens: event.charge.outputTokens,
 					estimated: event.charge.estimated,
-					output: { toolCalls: event.charge.toolNames },
+					payload: { prompt: prompt.slice(0, 2_000), system: system.slice(0, 500), tools: params.tools },
+					output: {
+						toolCalls: event.charge.toolNames,
+						text: event.charge.text.slice(0, 2_000),
+					},
 				})
 			} else if (event.type === "tool_charge") {
 				if (event.charge.usage) {
@@ -406,6 +416,7 @@ const categorizeNode: NodeImplementation = {
 			inputTokens: usage.inputTokens,
 			outputTokens: usage.outputTokens,
 			estimated: usage.inputTokens === 0 && usage.outputTokens === 0,
+			payload: { input: input.slice(0, 2_000), categories: listing.slice(0, 1_000) },
 			output: { answer: reply.slice(0, 200) },
 		})
 
