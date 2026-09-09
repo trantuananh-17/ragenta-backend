@@ -69,7 +69,7 @@ export const MODELS: ModelDefinition[] = [
 		provider: "anthropic",
 		model: "claude-haiku-4-5",
 		capability: "chat",
-		tier: "economy",
+		tier: "premium",
 		rates: { input: 1, output: 5, embedding: 0 },
 		contextWindow: 200_000,
 		vision: true,
@@ -223,8 +223,18 @@ export const MODELS: ModelDefinition[] = [
 	},
 ]
 
-/** Fallbacks for a workspace that has never chosen. Economy, so free works out of the box. */
-export const DEFAULT_CHAT = { provider: "anthropic", model: "claude-haiku-4-5" } as const
+/**
+ * Fallbacks for a workspace that has never chosen. Economy, so free works out of
+ * the box — which is why this moved when the economy ceiling did.
+ *
+ * It was `claude-haiku-4-5` while that counted as economy. Lowering the ceiling
+ * made haiku premium and left the compiled default unrunnable on the plan it
+ * exists to serve: a free workspace that never picked a model would have been
+ * refused by `assertSelectable` on its first message. The fix belongs here rather
+ * than in a plan's stored allowlist, because a default that only works while a
+ * database row says so is a landmine for the next deployment.
+ */
+export const DEFAULT_CHAT = { provider: "openai", model: "gpt-4o-mini" } as const
 export const DEFAULT_EMBEDDING = {
 	provider: "openai",
 	model: "text-embedding-3-small",
@@ -234,16 +244,24 @@ export const DEFAULT_EMBEDDING = {
  * Which plan tier a model belongs to, from what it costs.
  *
  * Needed because an imported catalogue carries prices but no tier — the vendor
- * has no idea how Ragenta's plans are drawn. The thresholds are chosen to
- * reproduce the hand-written entries above rather than invented: Haiku (1 / 5)
- * and gpt-4o-mini (0.15 / 0.6) come out economy, Sonnet (3 / 15) and gpt-4o
- * (2.5 / 10) come out premium. A model at or below both numbers is economy.
+ * has no idea how Ragenta's plans are drawn. A model at or below both numbers
+ * is economy: gpt-4o-mini (0.15 / 0.6) and gemini-2.5-flash (0.3 / 2.5) come
+ * out economy, Haiku (1 / 5) and gpt-4o (2.5 / 10) come out premium.
+ *
+ * The ceilings were 1 / 5 until they were lowered, drawn that way to include
+ * Haiku. That made the tier useless as a statement about cost: at the measured
+ * 13:1 input:output ratio this deployment actually runs, Haiku blends to about
+ * $1.29 per million tokens against gpt-4o-mini's $0.18, so one tier spanned a
+ * sevenfold price range. A tier is what decides which plan may run a model, so
+ * the dearest member of it is what the cheapest plan costs to serve — keeping a
+ * model seven times the price of the tier's floor inside it is a margin leak,
+ * not a generous default.
  *
  * Erring towards `premium` is the safe direction: it narrows who may run a
  * model, where the opposite would let an expensive one onto a cheaper plan.
  */
-const ECONOMY_INPUT_CEILING = 1
-const ECONOMY_OUTPUT_CEILING = 5
+const ECONOMY_INPUT_CEILING = 0.5
+const ECONOMY_OUTPUT_CEILING = 3
 
 export function tierFor(inputPerMillion: number, outputPerMillion: number): ModelTier {
 	return inputPerMillion <= ECONOMY_INPUT_CEILING &&

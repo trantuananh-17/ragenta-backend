@@ -34,23 +34,32 @@ describe("tierFor", () => {
 	})
 
 	it("calls a model economy when it is under both ceilings", () => {
-		// gpt-4o-mini's real rates.
+		// gpt-4o-mini's and gemini-2.5-flash's real rates.
 		expect(tierFor(0.15, 0.6)).toBe("economy")
+		expect(tierFor(0.3, 2.5)).toBe("economy")
 	})
 
 	it("includes a model priced exactly at both ceilings", () => {
-		// Haiku sits on the line at 1 and 5, and the thresholds were drawn to
-		// include it. An exclusive comparison would move it to premium and take
-		// the free plan's only chat model away.
-		expect(tierFor(1, 5)).toBe("economy")
+		// The comparison is inclusive, so a vendor pricing a model exactly on the
+		// line lands in the cheaper tier rather than one cent's worth of rounding
+		// deciding which plans may run it.
+		expect(tierFor(0.5, 3)).toBe("economy")
 	})
 
 	it("calls a model premium when either price alone is over its ceiling", () => {
 		// Both directions, because a model can be cheap to prompt and expensive to
 		// read back — which is the shape most reasoning models have.
-		expect(tierFor(1.01, 5)).toBe("premium")
-		expect(tierFor(1, 5.01)).toBe("premium")
+		expect(tierFor(0.51, 3)).toBe("premium")
+		expect(tierFor(0.5, 3.01)).toBe("premium")
 		expect(tierFor(3, 15)).toBe("premium")
+	})
+
+	it("keeps the models the lowered ceilings were meant to move out of economy", () => {
+		// The 1 / 5 ceilings put Haiku and gemini-3.7-flash beside gpt-4o-mini at
+		// roughly seven times its blended price. Both are premium now, and these
+		// are the real rates that must keep them there.
+		expect(tierFor(1, 5)).toBe("premium")
+		expect(tierFor(0.75, 3.75)).toBe("premium")
 	})
 
 	it("calls a free model economy", () => {
