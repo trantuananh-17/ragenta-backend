@@ -132,6 +132,16 @@ describe("buildGraphMessages", () => {
 		expect(system.content).toContain("web_search")
 	})
 
+	it("shows a worked example that reaches a tool through an agent node", () => {
+		const [system] = buildGraphMessages("read my mail")
+		if (!system) throw new Error("no system message")
+		// Describing the tool path was not enough on its own: the model kept echoing
+		// the refusal rule back instead of using an `agent` node, so the path it
+		// should take is demonstrated rather than only explained.
+		expect(system.content).toContain('"type":"agent"')
+		expect(system.content).toContain('"tools":["gmail_search"]')
+	})
+
 	it("carries the request as the user turn", () => {
 		const [, user] = buildGraphMessages("read my mail")
 		if (!user) throw new Error("no user message")

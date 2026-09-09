@@ -5,6 +5,7 @@ import type { DbExecutor } from "../../db/client"
 import { agent } from "../../db/schema"
 import { ConflictError, NotFoundError, ValidationError } from "../../shared/errors"
 import { newId } from "../../shared/id"
+import { logger } from "../../shared/logger"
 import type { PaginationQuery } from "../../shared/pagination"
 import { page } from "../../shared/pagination"
 import { auditService } from "../audit/audit.service"
@@ -387,6 +388,19 @@ export const agentService = {
 		})
 
 		const result = parseGeneratedGraph(answer.text)
+
+		// A refusal is the one outcome that cannot be diagnosed from the response
+		// alone: the person sees a sentence and the reason lives in what the model
+		// wrote. Logged truncated, and only when it failed — a successful draft is
+		// already on the canvas where anyone can look at it.
+		if ("errors" in result) {
+			logger.warn("agent.graph_draft_refused", {
+				workspaceId,
+				prompt: prompt.slice(0, 200),
+				errors: result.errors,
+				answer: answer.text.slice(0, 600),
+			})
+		}
 
 		return result
 	},
