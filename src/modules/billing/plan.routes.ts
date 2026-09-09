@@ -3,7 +3,9 @@ import { Hono } from "hono"
 import { requireAuth } from "../../api/middleware/session"
 import type { AppEnv } from "../../api/types"
 import {
-	FREE_MONTHLY_CREDITS,
+	CUSTOM_TOPUP_MAX_USD,
+	CUSTOM_TOPUP_MIN_USD,
+	CUSTOM_TOPUP_USD_PER_MILLION_CREDITS,
 	PLAN_LIMITS,
 	PLAN_NAMES,
 	SIGNUP_GRANT_CREDITS,
@@ -23,11 +25,12 @@ planRoutes.get("/", (c) =>
 	c.json({
 		signupGrantCredits: SIGNUP_GRANT_CREDITS,
 		/**
-		 * The free plan's monthly allowance. Granted to one workspace per account —
-		 * the first one it created — so a price list that showed it per workspace
-		 * would be describing a tier that does not exist.
+		 * Free has no monthly allowance any more — the signup grant is the whole of
+		 * it. Kept as a literal 0 because this response shape is a contract with
+		 * the customer and admin frontends, which both still read the field; drop
+		 * it here only once both have stopped.
 		 */
-		freeMonthlyCredits: FREE_MONTHLY_CREDITS,
+		freeMonthlyCredits: 0,
 		plans: PLAN_NAMES.map((name) => ({ name, ...PLAN_LIMITS[name] })),
 		topupPacks: Object.entries(TOPUP_PACKS).map(([id, pack]) => ({
 			id,
@@ -36,5 +39,15 @@ planRoutes.get("/", (c) =>
 			usdPerMillionCredits:
 				Math.round((pack.priceUsd / (pack.credits / 1_000_000)) * 100) / 100,
 		})),
+		/**
+		 * The bounds of a named amount, served for the same reason the packs are:
+		 * the screen shows what an amount buys before it is submitted, and it must
+		 * quote the rate the checkout will actually charge.
+		 */
+		customTopup: {
+			minUsd: CUSTOM_TOPUP_MIN_USD,
+			maxUsd: CUSTOM_TOPUP_MAX_USD,
+			usdPerMillionCredits: CUSTOM_TOPUP_USD_PER_MILLION_CREDITS,
+		},
 	}),
 )

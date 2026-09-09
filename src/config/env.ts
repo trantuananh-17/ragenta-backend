@@ -93,6 +93,7 @@ const envSchema = z.object({
 	 */
 	STRIPE_SECRET_KEY: z.string().optional(),
 	STRIPE_WEBHOOK_SECRET: z.string().optional(),
+	STRIPE_PRICE_STARTER: z.string().optional(),
 	STRIPE_PRICE_PRO: z.string().optional(),
 	STRIPE_PRICE_TEAM: z.string().optional(),
 	STRIPE_PRICE_TOPUP_1M: z.string().optional(),
@@ -277,6 +278,7 @@ export const env = {
 					secretKey: raw.STRIPE_SECRET_KEY,
 					webhookSecret: raw.STRIPE_WEBHOOK_SECRET,
 					prices: {
+						starter: raw.STRIPE_PRICE_STARTER,
 						pro: raw.STRIPE_PRICE_PRO,
 						team: raw.STRIPE_PRICE_TEAM,
 						topup1m: raw.STRIPE_PRICE_TOPUP_1M,

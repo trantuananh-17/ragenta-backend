@@ -27,7 +27,7 @@ export const subscription = pgTable(
 		organizationId: text("organization_id")
 			.notNull()
 			.references(() => organization.id, { onDelete: "cascade" }),
-		/** free | pro | enterprise — see src/modules/billing/plans.ts */
+		/** One of PLAN_NAMES — see src/modules/billing/plans.ts */
 		plan: text("plan").notNull(),
 		/** incomplete | active | past_due | canceled */
 		status: text("status").default("incomplete").notNull(),

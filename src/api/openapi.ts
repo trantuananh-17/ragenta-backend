@@ -106,7 +106,7 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 	"GET /v1/me/workspaces": { summary: "Workspaces the caller belongs to", tags: ["Account"] },
 
 	"GET /v1/plans": {
-		summary: "Plan catalogue and top-up packs",
+		summary: "Plan catalogue, top-up packs and the custom top-up bounds",
 		tags: ["Billing"],
 	},
 
@@ -259,7 +259,7 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 	},
 
 	"POST /v1/workspaces/:workspaceId/billing/checkout": {
-		summary: "Start Stripe checkout for a plan or a top-up pack",
+		summary: "Start Stripe checkout for a plan, a top-up pack or a custom credit amount",
 		tags: ["Billing"],
 		access: "billing.manage",
 		body: createCheckoutSchema,

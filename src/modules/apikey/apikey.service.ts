@@ -3,6 +3,7 @@ import { ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } fro
 import { newId } from "../../shared/id"
 import { logger } from "../../shared/logger"
 import { auditService } from "../audit/audit.service"
+import { billingService } from "../billing/billing.service"
 import { permissionService } from "../rbac/permission.service"
 import { workspaceRepository } from "../workspace/workspace.repository"
 import type { MembershipRow } from "../workspace/workspace.repository"
@@ -36,6 +37,8 @@ export const apiKeyService = {
 	 * one somebody debugs for an afternoon; a refusal names the permission.
 	 */
 	async create(membership: MembershipRow, input: CreateApiKeyInput, actorId: string) {
+		await billingService.assertPlanFeature(membership.organizationId, "apiKeysEnabled")
+
 		const unknown = input.permissions.filter(
 			(key) => !(WORKSPACE_PERMISSION_KEYS as readonly string[]).includes(key),
 		)

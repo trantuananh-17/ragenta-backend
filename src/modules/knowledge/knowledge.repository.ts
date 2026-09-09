@@ -50,6 +50,18 @@ export const knowledgeRepository = {
 		return { items, total: totals?.value ?? 0 }
 	},
 
+	/**
+	 * Every base in the workspace, unnarrowed by visibility — this counts against
+	 * the plan, and a base somebody cannot see is still one the workspace holds.
+	 */
+	async countBases(workspaceId: string, executor: DbExecutor = db) {
+		const [row] = await executor
+			.select({ value: count() })
+			.from(knowledgeBase)
+			.where(eq(knowledgeBase.organizationId, workspaceId))
+		return row?.value ?? 0
+	},
+
 	async findBase(workspaceId: string, baseId: string, executor: DbExecutor = db) {
 		const rows = await executor
 			.select()

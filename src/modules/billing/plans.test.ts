@@ -1,18 +1,25 @@
 import { describe, expect, it } from "vitest"
 
+import { createCheckoutSchema } from "./billing.dto"
 import {
-	FREE_MONTHLY_CREDITS,
+	COUNTED_PLAN_LIMITS,
+	CUSTOM_TOPUP_MAX_USD,
+	CUSTOM_TOPUP_MIN_USD,
 	PLAN_LIMITS,
 	PLAN_NAMES,
 	SIGNUP_GRANT_CREDITS,
 	TOPUP_PACKS,
+	creditsForCustomTopupUsd,
 	creditsForPeriod,
 	isPlanName,
 	isTopupPackId,
 	monthlyPriceUsd,
 	planLimits,
+	planRaisingLimit,
+	planUnlockingFeature,
 	topupPackByCredits,
 } from "./plans"
+import type { CountedPlanLimit, PlanLimits } from "./plans"
 
 /**
  * The plan catalogue is the product's price list, and every number in it is
@@ -44,13 +51,14 @@ describe("creditsForPeriod", () => {
 		// Team is sold as a bundle: seats change what it costs, not what it gets.
 		expect(creditsForPeriod("team", 1)).toBe(8_000_000)
 		expect(creditsForPeriod("team", 25)).toBe(8_000_000)
+		// Starter is single-seat and flat, so the seat count can only ever be one.
+		expect(creditsForPeriod("starter", 1)).toBe(500_000)
 	})
 
 	it("schedules nothing for the plans that are not granted on a schedule", () => {
-		// Free's allowance belongs to the account, not the workspace, and is
-		// granted by `scheduledRefill` under the owner's key. Enterprise is
-		// invoiced and topped up by hand. Both must answer null, or the refill job
-		// would grant them something every month.
+		// Free is a one-time trial and enterprise is invoiced and topped up by
+		// hand. Both must answer null, or the refill job would grant them
+		// something every month.
 		expect(creditsForPeriod("free", 1)).toBeNull()
 		expect(creditsForPeriod("enterprise", 50)).toBeNull()
 	})
@@ -73,7 +81,13 @@ describe("planLimits", () => {
 		expect(planLimits("free").modelTiers).toEqual(["economy"])
 	})
 
-	it("gives every paid plan both tiers", () => {
+	it("keeps starter on the cheap models", () => {
+		// $9 flat does not carry a premium-model workspace: the frontier models are
+		// what the per-seat plans are priced to absorb.
+		expect(planLimits("starter").modelTiers).toEqual(["economy"])
+	})
+
+	it("gives every per-seat and negotiated plan both tiers", () => {
 		for (const plan of ["pro", "team", "enterprise"] as const) {
 			expect(planLimits(plan).modelTiers).toContain("premium")
 			expect(planLimits(plan).modelTiers).toContain("economy")
@@ -84,9 +98,14 @@ describe("planLimits", () => {
 		// Free has no card on file and no subscription behind it; letting it buy
 		// packs would make it a standalone pay-as-you-go tier by accident.
 		expect(planLimits("free").topupsEnabled).toBe(false)
-		for (const plan of ["pro", "team", "enterprise"] as const) {
+		for (const plan of ["starter", "pro", "team", "enterprise"] as const) {
 			expect(planLimits(plan).topupsEnabled).toBe(true)
 		}
+	})
+
+	it("sells starter through self-serve checkout", () => {
+		// Without a price key the upgrade button on the paywall has nothing to open.
+		expect(planLimits("starter").stripePriceKey).toBe("starter")
 	})
 
 	it("keeps enterprise out of self-serve checkout", () => {
@@ -100,6 +119,80 @@ describe("planLimits", () => {
 			expect(PLAN_LIMITS[plan]).toBeDefined()
 		}
 		expect(Object.keys(PLAN_LIMITS).sort()).toEqual([...PLAN_NAMES].sort())
+	})
+
+	it("gives every plan a value for every limit", () => {
+		// A plan added later with a field left off would read as `undefined`, and
+		// an undefined limit gates nothing — so the new plan would silently be
+		// unlimited on every feature at once rather than failing anywhere visible.
+		const fields = Object.keys(PLAN_LIMITS.free) as (keyof PlanLimits)[]
+
+		for (const plan of PLAN_NAMES) {
+			for (const field of fields) {
+				expect(PLAN_LIMITS[plan][field]).toBeDefined()
+			}
+		}
+	})
+})
+
+/**
+ * What each plan unlocks, as opposed to what it funds. These are the boundaries
+ * the domain services refuse at, so a value moved here silently opens or closes
+ * a feature for every workspace on that plan.
+ */
+describe("the feature ladder", () => {
+	it("lets the free plan hold enough to evaluate the product and no more", () => {
+		expect(planLimits("free").knowledgeBaseLimit).toBe(1)
+		expect(planLimits("free").agentLimit).toBe(2)
+		expect(planLimits("free").widgetLimit).toBe(0)
+	})
+
+	it("never allows less of something on a more expensive plan", () => {
+		// Null is unlimited and therefore the top of the ladder. A plan that
+		// allowed fewer of something than the one below it would make an upgrade a
+		// downgrade, and the refusal would name a plan that does not help.
+		for (const limit of Object.keys(COUNTED_PLAN_LIMITS) as CountedPlanLimit[]) {
+			const ladder = PLAN_NAMES.map((plan) => planLimits(plan)[limit])
+
+			for (let index = 1; index < ladder.length; index += 1) {
+				const below = ladder[index - 1]
+				const above = ladder[index]
+				if (below === null) expect(above).toBeNull()
+				else if (above !== null) expect(above).toBeGreaterThanOrEqual(below!)
+			}
+		}
+	})
+
+	it("keeps API keys and data sources behind a per-seat plan", () => {
+		// One is unattended spend, the other a credential to a customer's own
+		// database. Neither is extended to an account that has never paid.
+		for (const plan of ["free", "starter"] as const) {
+			expect(planLimits(plan).apiKeysEnabled).toBe(false)
+			expect(planLimits(plan).dataSourcesEnabled).toBe(false)
+		}
+		for (const plan of ["pro", "team", "enterprise"] as const) {
+			expect(planLimits(plan).apiKeysEnabled).toBe(true)
+			expect(planLimits(plan).dataSourcesEnabled).toBe(true)
+		}
+	})
+
+	it("opens automation at the cheapest paid plan", () => {
+		expect(planLimits("free").automationEnabled).toBe(false)
+		expect(planLimits("starter").automationEnabled).toBe(true)
+	})
+
+	it("names a plan that lifts each boundary the cheaper plans have", () => {
+		// The refusal text is built from these, and an upgrade prompt that names
+		// nothing is a refusal the customer cannot act on.
+		expect(planRaisingLimit("free", "knowledgeBaseLimit")).toBe("starter")
+		expect(planRaisingLimit("starter", "agentLimit")).toBe("pro")
+		expect(planUnlockingFeature("automationEnabled")).toBe("starter")
+		expect(planUnlockingFeature("apiKeysEnabled")).toBe("pro")
+	})
+
+	it("has nothing to offer a plan that is already unlimited", () => {
+		expect(planRaisingLimit("team", "agentLimit")).toBeNull()
+		expect(planRaisingLimit("enterprise", "knowledgeBaseLimit")).toBeNull()
 	})
 })
 
@@ -125,12 +218,87 @@ describe("the commercial rules the numbers encode", () => {
 		}
 	})
 
-	it("gives a new account its first month twice over", () => {
-		// The signup grant lands in the top-up bucket and the monthly allowance in
-		// the plan bucket, so a first month is both and every month after is one.
-		// Sized together on purpose; changing either alone moves the free tier.
-		expect(SIGNUP_GRANT_CREDITS + FREE_MONTHLY_CREDITS).toBe(100_000)
-		expect(FREE_MONTHLY_CREDITS).toBe(50_000)
+	it("funds the free plan once and never again", () => {
+		// Free is a trial: the signup grant is the entire free tier, and no plan
+		// rule may quietly turn it back into a standing monthly allowance.
+		expect(SIGNUP_GRANT_CREDITS).toBe(20_000)
+		expect(planLimits("free").flatCredits).toBeNull()
+		expect(planLimits("free").creditsPerSeat).toBeNull()
+	})
+})
+
+/**
+ * A named amount is the one price in the catalogue a customer types themselves,
+ * so both halves of it are tested: what the money buys, and what the boundary
+ * lets through. The conversion decides what the webhook grants — it is written
+ * into the checkout session's metadata before Stripe is ever called — and the
+ * schema is the only thing standing between a typo and a card charge.
+ */
+describe("creditsForCustomTopupUsd", () => {
+	it("sells a custom amount at exactly the smallest pack's price", () => {
+		// $39 buys a million either way. If this ever diverged, the same money would
+		// buy a different number of credits depending on which button was pressed.
+		expect(creditsForCustomTopupUsd(39)).toBe(1_000_000)
+		expect(creditsForCustomTopupUsd(39)).toBe(TOPUP_PACKS["1m"].credits)
+	})
+
+	it("never undercuts the volume packs", () => {
+		// The 5M and 15M packs exist to be the cheaper way to buy in bulk. A custom
+		// amount matching their price must buy fewer credits, not more.
+		expect(creditsForCustomTopupUsd(TOPUP_PACKS["5m"].priceUsd)).toBeLessThan(
+			TOPUP_PACKS["5m"].credits,
+		)
+		expect(creditsForCustomTopupUsd(TOPUP_PACKS["15m"].priceUsd)).toBeLessThan(
+			TOPUP_PACKS["15m"].credits,
+		)
+	})
+
+	it("rounds down to a whole credit", () => {
+		// $10 is 256410.25… credits. The ledger holds whole credits, and rounding up
+		// would grant a fraction nobody paid for.
+		expect(creditsForCustomTopupUsd(CUSTOM_TOPUP_MIN_USD)).toBe(256_410)
+		expect(Number.isInteger(creditsForCustomTopupUsd(137))).toBe(true)
+	})
+})
+
+describe("the custom top-up boundary", () => {
+	const parse = (amountUsd: number) => createCheckoutSchema.safeParse({ amountUsd })
+
+	it("accepts the minimum exactly", () => {
+		expect(parse(CUSTOM_TOPUP_MIN_USD).success).toBe(true)
+	})
+
+	it("refuses a cent below the minimum", () => {
+		// Stripe's $0.30 + 2.9% is 5.8% of a $10 payment and worse below it.
+		const result = parse(CUSTOM_TOPUP_MIN_USD - 0.01)
+		expect(result.success).toBe(false)
+		expect(JSON.stringify(result.error?.issues)).toContain(`$${CUSTOM_TOPUP_MIN_USD}`)
+	})
+
+	it("accepts the maximum exactly", () => {
+		expect(parse(CUSTOM_TOPUP_MAX_USD).success).toBe(true)
+	})
+
+	it("refuses a dollar above the maximum", () => {
+		const result = parse(CUSTOM_TOPUP_MAX_USD + 1)
+		expect(result.success).toBe(false)
+		expect(JSON.stringify(result.error?.issues)).toContain(`$${CUSTOM_TOPUP_MAX_USD}`)
+	})
+
+	it("refuses a fraction of a dollar inside the range", () => {
+		expect(parse(49.5).success).toBe(false)
+	})
+
+	it("refuses a custom amount alongside a pack or a plan", () => {
+		// One checkout buys one thing. Two fields set would leave the controller to
+		// pick, and it would silently pick the first.
+		expect(
+			createCheckoutSchema.safeParse({ pack: "1m", amountUsd: 50 }).success,
+		).toBe(false)
+		expect(
+			createCheckoutSchema.safeParse({ plan: "pro", amountUsd: 50 }).success,
+		).toBe(false)
+		expect(createCheckoutSchema.safeParse({}).success).toBe(false)
 	})
 })
 
@@ -144,7 +312,7 @@ describe("isPlanName", () => {
 	it("rejects anything else that arrives as a plan", () => {
 		// It guards a value read back out of the subscription row and off an admin
 		// request, and it narrows the type that indexes PLAN_LIMITS.
-		expect(isPlanName("starter")).toBe(false)
+		expect(isPlanName("growth")).toBe(false)
 		expect(isPlanName("FREE")).toBe(false)
 		expect(isPlanName("")).toBe(false)
 	})
@@ -172,6 +340,15 @@ describe("monthlyPriceUsd", () => {
 	it("bills free at nothing, however many seats it somehow has", () => {
 		expect(monthlyPriceUsd("free", 1)).toBe(0)
 		expect(monthlyPriceUsd("free", 4)).toBe(0)
+	})
+
+	it("bills starter flat, whatever seat count it is asked about", () => {
+		// Single-seat and flat: the seat arithmetic must not reach it at all, or a
+		// workspace that somehow held two seats would be invoiced for a second one
+		// that was never sold.
+		expect(monthlyPriceUsd("starter", 0)).toBe(9)
+		expect(monthlyPriceUsd("starter", 1)).toBe(9)
+		expect(monthlyPriceUsd("starter", 4)).toBe(9)
 	})
 
 	it("bills pro per occupied seat", () => {

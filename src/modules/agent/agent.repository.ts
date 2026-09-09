@@ -36,6 +36,18 @@ export const agentRepository = {
 		return { items, total: totals?.value ?? 0 }
 	},
 
+	/**
+	 * Every agent in the workspace, unnarrowed by visibility — this counts against
+	 * the plan, and an agent somebody cannot see is still one the workspace holds.
+	 */
+	async count(workspaceId: string, executor: DbExecutor = db) {
+		const [row] = await executor
+			.select({ value: count() })
+			.from(agent)
+			.where(eq(agent.organizationId, workspaceId))
+		return row?.value ?? 0
+	},
+
 	async findById(workspaceId: string, agentId: string, executor: DbExecutor = db) {
 		const rows = await executor
 			.select()

@@ -11,13 +11,16 @@ import { billingRepository } from "./billing.repository"
 import { paymentRepository } from "./payment.repository"
 import {
 	ACTIVE_SUBSCRIPTION_STATUSES,
-	FREE_MONTHLY_CREDITS,
+	COUNTED_PLAN_LIMITS,
+	GATED_PLAN_FEATURES,
 	PLAN_FREE,
 	SIGNUP_GRANT_CREDITS,
 	creditsForPeriod,
 	planLimits,
+	planRaisingLimit,
+	planUnlockingFeature,
 } from "./plans"
-import type { PlanName } from "./plans"
+import type { CountedPlanLimit, GatedPlanFeature, PlanName } from "./plans"
 
 const log = logger.child({ module: "billing" })
 
@@ -351,34 +354,18 @@ export const billingService = {
 	 * What this workspace is owed this period, and the ledger key that makes the
 	 * grant happen once.
 	 *
-	 * A paid plan is billed per workspace, so its allowance is the workspace's
-	 * and its key names the workspace. Free is not: the allowance belongs to the
-	 * account and lands on the one workspace that account created first, so its
-	 * key names the *owner*. That is what stops the obvious abuse — a second free
-	 * workspace is worth nothing, and deleting the first to make a new "first"
-	 * cannot claim the month twice.
+	 * A plan is billed per workspace, so its allowance is the workspace's and its
+	 * key names the workspace.
 	 */
 	async scheduledRefill(
 		workspaceId: string,
 		plan: PlanName,
 		at: Date,
 	): Promise<{ amount: number; reference: string } | null> {
-		if (plan === PLAN_FREE) {
-			const ownerId = await workspaceRepository.findOwnerId(workspaceId)
-			if (!ownerId) return null
-
-			const primaryId = await workspaceRepository.findPrimaryWorkspaceId(ownerId)
-			if (primaryId !== workspaceId) return null
-
-			return {
-				amount: FREE_MONTHLY_CREDITS,
-				reference: `refill:free:${ownerId}:${monthKey(at)}`,
-			}
-		}
-
 		const seats = await workspaceRepository.countMembers(workspaceId)
 		const amount = creditsForPeriod(plan, seats)
-		// Enterprise is granted by hand and has no scheduled allowance.
+		// Free is a one-time trial and enterprise is granted by hand; neither has
+		// a scheduled allowance, and both answer null here.
 		if (amount === null) return null
 
 		return { amount, reference: `refill:${workspaceId}:${monthKey(at)}` }
@@ -475,6 +462,62 @@ export const billingService = {
 				{ plan, limit, used },
 			)
 		}
+	},
+
+	/**
+	 * Guards a counted plan limit before the resource is created.
+	 *
+	 * The count is a callback rather than a number so an unlimited plan never
+	 * runs it: `null` is every team and enterprise workspace, which are also the
+	 * ones holding enough rows for the count to be worth skipping.
+	 *
+	 * Count-then-create, like the seat guard above — two creates racing each
+	 * other can both read the same count and both pass. The overshoot is one row
+	 * on a boundary a person has to deliberately drive at, and the alternative is
+	 * a lock held across a create that already writes several tables.
+	 */
+	async assertWithinPlanLimit(
+		workspaceId: string,
+		limit: CountedPlanLimit,
+		countHeld: () => Promise<number>,
+	): Promise<void> {
+		const plan = await this.getPlan(workspaceId)
+		const allowed = planLimits(plan)[limit]
+		if (allowed === null) return
+
+		const held = await countHeld()
+		if (held < allowed) return
+
+		const noun = COUNTED_PLAN_LIMITS[limit]
+		const upgrade = planRaisingLimit(plan, limit)
+		throw new EntitlementError(
+			"PLAN_LIMIT_REACHED",
+			`The ${plan} plan includes ${allowed} ${allowed === 1 ? noun.one : noun.many}.` +
+				(upgrade ? ` Upgrade to ${upgrade}, or remove one first.` : " Remove one first."),
+			{ plan, limit, allowed, held },
+		)
+	},
+
+	/**
+	 * Guards an all-or-nothing capability before it is used for the first time.
+	 *
+	 * Separate from the counted guard because there is nothing to count: the
+	 * refusal is about the plan alone, and a "limit of 0" would say the customer
+	 * had run out of something they never had.
+	 */
+	async assertPlanFeature(workspaceId: string, feature: GatedPlanFeature): Promise<void> {
+		const plan = await this.getPlan(workspaceId)
+		if (planLimits(plan)[feature]) return
+
+		const upgrade = planUnlockingFeature(feature)
+		throw new EntitlementError(
+			"PLAN_FEATURE_UNAVAILABLE",
+			`${GATED_PLAN_FEATURES[feature]} are not included in the ${plan} plan.` +
+				// Empty when no plan unlocks it, so nobody is sent to a tier that
+				// does not exist.
+				(upgrade ? ` Upgrade to ${upgrade} to use them.` : ""),
+			{ plan, feature },
+		)
 	},
 
 	async changePlan(workspaceId: string, plan: PlanName, actorId: string) {

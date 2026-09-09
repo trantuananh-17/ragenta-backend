@@ -5,6 +5,7 @@ import { newId } from "../../shared/id"
 import { logger } from "../../shared/logger"
 import { auditService } from "../audit/audit.service"
 import { agentRepository } from "../agent/agent.repository"
+import { billingService } from "../billing/billing.service"
 import { agentService } from "../agent/agent.service"
 import { backoffMinutes, nextRun, validateCron } from "./schedule"
 import { triggerRepository } from "./trigger.repository"
@@ -57,6 +58,8 @@ export const triggerService = {
 		input: SaveTriggerInput,
 		actorId: string,
 	) {
+		await billingService.assertPlanFeature(workspaceId, "automationEnabled")
+
 		const agent = await agentRepository.findById(workspaceId, agentId)
 		if (!agent) throw new NotFoundError("Agent")
 

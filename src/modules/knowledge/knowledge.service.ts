@@ -20,6 +20,7 @@ import { deleteKnowledgeBaseVectors, isVectorStoreConfigured } from "../../vecto
 import { VectorStoreUnavailableError } from "../../vector/qdrant"
 import { enqueueDocumentIngestion } from "../../jobs/ingestion.jobs"
 import { auditService } from "../audit/audit.service"
+import { billingService } from "../billing/billing.service"
 import { modelService } from "../model/model.service"
 import { visibilityFor } from "../rbac/visibility"
 import type { MembershipRow } from "../workspace/workspace.repository"
@@ -135,6 +136,10 @@ export const knowledgeService = {
 		actorId: string,
 	) {
 		assertInfrastructure()
+
+		await billingService.assertWithinPlanLimit(workspaceId, "knowledgeBaseLimit", () =>
+			knowledgeRepository.countBases(workspaceId),
+		)
 
 		const selection =
 			input.embedding ?? (await modelService.getSettings(workspaceId)).embedding

@@ -9,6 +9,7 @@ import { logger } from "../../shared/logger"
 import type { PaginationQuery } from "../../shared/pagination"
 import { page } from "../../shared/pagination"
 import { auditService } from "../audit/audit.service"
+import { billingService } from "../billing/billing.service"
 import { knowledgeService } from "../knowledge/knowledge.service"
 import { modelService } from "../model/model.service"
 import { enqueueAgentRun } from "../../queue/agent.jobs"
@@ -255,6 +256,12 @@ export const agentService = {
 	 * nothing to run is not a state that exists (ADR-029).
 	 */
 	async create(workspaceId: string, input: CreateAgentInput, actorId: string) {
+		// Every way of making an agent lands here, `createFromTemplate` included,
+		// so the plan cap has no route around it.
+		await billingService.assertWithinPlanLimit(workspaceId, "agentLimit", () =>
+			agentRepository.count(workspaceId),
+		)
+
 		const agentId = newId()
 		const version = await versionValues(
 			workspaceId,

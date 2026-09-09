@@ -6,6 +6,7 @@ import { newId } from "../../shared/id"
 import { logger } from "../../shared/logger"
 import { enqueueWebhookDelivery } from "../../jobs/webhook.jobs"
 import { auditService } from "../audit/audit.service"
+import { billingService } from "../billing/billing.service"
 import { safeFetch } from "../agent/tools/safe-fetch"
 import { subscribes } from "./events"
 import { signPayload } from "./signature"
@@ -44,6 +45,8 @@ export const webhookService = {
 	 * closing the page and then asking where the secret went.
 	 */
 	async create(workspaceId: string, input: SaveWebhookEndpointInput, actorId: string) {
+		await billingService.assertPlanFeature(workspaceId, "automationEnabled")
+
 		const secret = newSecret()
 		const id = newId()
 

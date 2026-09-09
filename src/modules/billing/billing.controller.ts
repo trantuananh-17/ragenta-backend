@@ -58,11 +58,18 @@ export const billingController = {
 				: input.pack && isTopupPackId(input.pack)
 					? await stripeService.createTopupCheckout(
 							membership.organizationId,
-							input.pack,
+							{ pack: input.pack },
 							user.id,
 							user.email,
 						)
-					: null
+					: input.amountUsd !== undefined
+						? await stripeService.createTopupCheckout(
+								membership.organizationId,
+								{ amountUsd: input.amountUsd },
+								user.id,
+								user.email,
+							)
+						: null
 
 		if (!session) throw new ValidationError("Unknown plan or top-up pack.")
 		return c.json(session)

@@ -10,10 +10,23 @@ import { workspaceRepository } from "../workspace/workspace.repository"
 import { billingRepository } from "./billing.repository"
 import { billingService } from "./billing.service"
 import { paymentRepository } from "./payment.repository"
-import { PLAN_FREE, TOPUP_PACKS, planLimits } from "./plans"
+import {
+	PLAN_FREE,
+	PLAN_NAMES,
+	TOPUP_PACKS,
+	creditsForCustomTopupUsd,
+	planLimits,
+} from "./plans"
 import type { PlanName, TopupPackId } from "./plans"
 
 const log = logger.child({ module: "billing.stripe" })
+
+/**
+ * How a top-up was chosen: one of the fixed packs, or a dollar amount the
+ * customer named. Both grant credits the same way — only the Stripe line item
+ * differs.
+ */
+export type TopupCheckoutRequest = { pack: TopupPackId } | { amountUsd: number }
 
 /** Stripe timestamps are unix seconds, and null means "not set", not "epoch". */
 function toDate(seconds: number | null | undefined): Date | null {
@@ -40,14 +53,21 @@ function periodBounds(subscription: Stripe.Subscription) {
 	}
 }
 
-/** Which plan a Stripe price belongs to. Unknown prices are not guessed at. */
+/**
+ * Which plan a Stripe price belongs to. Unknown prices are not guessed at.
+ *
+ * Resolved from the catalogue rather than from a list of `if`s, because a plan
+ * missing from such a list does not fail loudly — its subscription webhook
+ * resolves to no plan and the paying workspace is filed as free.
+ */
 function planForPrice(priceId: string | undefined): PlanName | undefined {
 	if (!priceId) return undefined
 	const prices = env.stripe?.prices
 	if (!prices) return undefined
-	if (priceId === prices.pro) return "pro"
-	if (priceId === prices.team) return "team"
-	return undefined
+	return PLAN_NAMES.find((plan) => {
+		const key = planLimits(plan).stripePriceKey
+		return key !== null && prices[key] === priceId
+	})
 }
 
 export const stripeService = {
@@ -93,7 +113,12 @@ export const stripeService = {
 		}
 		const price = stripePriceId(priceKey)
 		if (!price) {
-			throw new ValidationError(`No Stripe price configured for the ${plan} plan.`)
+			// Names the variable: this only ever fires because a deployment was
+			// brought up without it, and the person reading the error is the one
+			// who has to go and set it.
+			throw new ValidationError(
+				`No Stripe price configured for the ${plan} plan. Set STRIPE_PRICE_${priceKey.toUpperCase()} on this deployment.`,
+			)
 		}
 
 		const customer = await this.ensureCustomer(workspaceId, billingEmail)
@@ -123,9 +148,16 @@ export const stripeService = {
 		return { url: session.url, sessionId: session.id }
 	},
 
+	/**
+	 * Checkout for a top-up, bought either as a fixed pack or as a custom amount.
+	 *
+	 * One method for both: the plan gate, the customer, the return URLs and the
+	 * metadata the webhook reads must not drift apart between the two ways of
+	 * buying the same thing.
+	 */
 	async createTopupCheckout(
 		workspaceId: string,
-		packId: TopupPackId,
+		request: TopupCheckoutRequest,
 		actorId: string,
 		billingEmail: string,
 	) {
@@ -136,10 +168,36 @@ export const stripeService = {
 			)
 		}
 
-		const pack = TOPUP_PACKS[packId]
-		const price = stripePriceId(pack.stripePriceKey)
-		if (!price) {
-			throw new ValidationError(`No Stripe price configured for the ${packId} top-up pack.`)
+		let lineItem: Stripe.Checkout.SessionCreateParams.LineItem
+		let credits: number
+		// Names the purchase in the ledger reason and on the payment row.
+		let packLabel: string
+
+		if ("pack" in request) {
+			const pack = TOPUP_PACKS[request.pack]
+			const price = stripePriceId(pack.stripePriceKey)
+			if (!price) {
+				throw new ValidationError(
+					`No Stripe price configured for the ${request.pack} top-up pack.`,
+				)
+			}
+			lineItem = { price, quantity: 1 }
+			credits = pack.credits
+			packLabel = request.pack
+		} else {
+			credits = creditsForCustomTopupUsd(request.amountUsd)
+			// Stripe has no price object for an arbitrary amount, and creating one per
+			// purchase would fill the dashboard with single-use prices. `price_data`
+			// prices this session alone.
+			lineItem = {
+				quantity: 1,
+				price_data: {
+					currency: "usd",
+					unit_amount: request.amountUsd * 100,
+					product_data: { name: `${credits.toLocaleString("en-US")} credits` },
+				},
+			}
+			packLabel = "custom"
 		}
 
 		const customer = await this.ensureCustomer(workspaceId, billingEmail)
@@ -147,14 +205,14 @@ export const stripeService = {
 		const session = await requireStripe().checkout.sessions.create({
 			mode: "payment",
 			customer,
-			line_items: [{ price, quantity: 1 }],
+			line_items: [lineItem],
 			success_url: `${env.appBaseUrl}/settings/billing?topup=success`,
 			cancel_url: `${env.appBaseUrl}/settings/billing?topup=cancelled`,
 			metadata: {
 				kind: "topup",
 				workspaceId,
-				pack: packId,
-				credits: String(pack.credits),
+				pack: packLabel,
+				credits: String(credits),
 			},
 			// Keep the card on file so auto-reload has something to charge later.
 			payment_intent_data: { setup_future_usage: "off_session" },
@@ -166,7 +224,7 @@ export const stripeService = {
 			organizationId: workspaceId,
 			targetType: "checkout_session",
 			targetId: session.id,
-			metadata: { kind: "topup", pack: packId, credits: pack.credits },
+			metadata: { kind: "topup", pack: packLabel, credits },
 		})
 
 		return { url: session.url, sessionId: session.id }

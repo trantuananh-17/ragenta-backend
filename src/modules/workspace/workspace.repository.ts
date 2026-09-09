@@ -102,25 +102,6 @@ export const workspaceRepository = {
 	},
 
 	/**
-	 * The workspace an account is entitled to a free monthly allowance on: the
-	 * first one it created.
-	 *
-	 * Derived from the oldest owner membership rather than stored as a flag. A
-	 * flag is one more thing to keep true, and the ordering already answers the
-	 * question — "the workspace you made first" is exactly what the free tier is
-	 * being described as.
-	 */
-	async findPrimaryWorkspaceId(userId: string, executor: DbExecutor = db) {
-		const rows = await executor
-			.select({ organizationId: member.organizationId })
-			.from(member)
-			.where(and(eq(member.userId, userId), eq(member.role, "owner")))
-			.orderBy(asc(member.createdAt), asc(member.id))
-			.limit(1)
-		return rows[0]?.organizationId
-	},
-
-	/**
 	 * Who owns this workspace. The oldest owner wins when there is more than one,
 	 * so a co-owner added later never changes whose allowance is being counted.
 	 */

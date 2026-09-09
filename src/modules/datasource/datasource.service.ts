@@ -12,6 +12,7 @@ import { newId } from "../../shared/id"
 import { logger } from "../../shared/logger"
 import { decryptSecret, encryptSecret } from "../../shared/crypto"
 import { auditService } from "../audit/audit.service"
+import { billingService } from "../billing/billing.service"
 import { modelService } from "../model/model.service"
 import { usageService } from "../usage/usage.service"
 import { datasourceRepository } from "./datasource.repository"
@@ -48,6 +49,14 @@ export const datasourceService = {
 			? await datasourceRepository.findSource(workspaceId, input.id)
 			: undefined
 		if (input.id && !existing) throw new NotFoundError("Data source")
+
+		// Only a new connection is gated. A workspace that downgrades keeps the
+		// sources it has working, for the reason a widget keeps serving: cutting a
+		// customer's agent off from their own database because a card expired is a
+		// worse failure than one connection too many.
+		if (!existing) {
+			await billingService.assertPlanFeature(workspaceId, "dataSourcesEnabled")
+		}
 
 		let engine = existing?.engine
 		let encryptedDsn = existing?.encryptedDsn
