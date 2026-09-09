@@ -213,6 +213,21 @@ export const providerService = {
 		const credential = await requireCredential(provider)
 		const listed = await descriptor.client.listModels(credential)
 
+		/**
+		 * A model switched off stays off across a re-import.
+		 *
+		 * Importing is how a rate is refreshed, so it runs against a catalogue an
+		 * operator has already curated — OpenRouter alone lists hundreds of models,
+		 * most of which a deployment never wants offered. Letting the upsert carry
+		 * `enabled: true` would turn every price refresh into a silent re-enable of
+		 * everything somebody had deliberately hidden.
+		 */
+		const enabledBefore = new Map(
+			(await providerRepository.listModels())
+				.filter((row) => row.provider === provider)
+				.map((row) => [row.model, row.enabled]),
+		)
+
 		let imported = 0
 		for (const model of listed) {
 			await providerRepository.upsertModel({
@@ -227,7 +242,7 @@ export const providerService = {
 				embeddingPerMillion: model.embeddingPerMillion.toFixed(6),
 				embeddingDimensions: model.embeddingDimensions ?? null,
 				vision: model.vision ?? null,
-				enabled: true,
+				enabled: enabledBefore.get(model.id) ?? true,
 				createdBy: actorId,
 			})
 			imported += 1
