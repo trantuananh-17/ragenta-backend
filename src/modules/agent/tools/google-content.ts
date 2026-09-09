@@ -26,7 +26,10 @@ export const gmailSearchParameters = z.object({
 		.min(1)
 		.max(500)
 		.describe(
-			'Gmail search syntax, e.g. "from:someone@example.com after:2026/01/01" or "subject:invoice is:unread".',
+			// The example used to be an absolute date, which is what a model copies.
+			// It has no clock, so a literal date is a guess that silently returns the
+			// wrong window rather than failing — prefer the relative form.
+			'Gmail search syntax. Prefer relative windows: "newer_than:1d" for the last day, "newer_than:7d" for the week. Also "from:someone@example.com", "subject:invoice", "is:unread", "-in:spam".',
 		),
 	limit: z.number().int().min(1).max(20).default(5).describe("How many messages to return."),
 })

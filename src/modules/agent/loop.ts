@@ -120,10 +120,31 @@ export async function* runToolLoop(
 	initial: ChatMessage[],
 	options: LoopOptions,
 ): AsyncGenerator<LoopEvent> {
-	let messages = [...initial]
+	const definitions = options.tools.length > 0 ? options.tools.map(toDefinition) : undefined
+
+	/**
+	 * A model has no clock.
+	 *
+	 * Asked to read "the last 24 hours" it wrote `after:2023/10/23` — a date from
+	 * its training, three years stale, which quietly returned everything since
+	 * 2023 instead of failing. Every tool that takes a date has that hole:
+	 * calendar ranges, Drive queries, anything phrased as "yesterday".
+	 *
+	 * Only when tools are in play. A plain completion is not writing arguments and
+	 * does not need its prompt altered.
+	 */
+	let messages: ChatMessage[] = definitions
+		? [
+				{
+					role: "system",
+					content: `The current date and time is ${new Date().toISOString()} (UTC). Work any relative date out from this. Never guess one, and prefer a relative filter — Gmail's \`newer_than:1d\` over a literal date — so the same flow keeps working tomorrow.`,
+				},
+				...initial,
+			]
+		: [...initial]
+
 	let answer = ""
 	const total: TokenUsage = { inputTokens: 0, outputTokens: 0 }
-	const definitions = options.tools.length > 0 ? options.tools.map(toDefinition) : undefined
 	let stepSeq = 0
 
 	for (let round = 1; round <= options.maxRounds; round += 1) {
