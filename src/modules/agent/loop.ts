@@ -1,3 +1,5 @@
+import { ZodError } from "zod"
+
 import type { ChatCapableClient, ChatMessage, ProviderCredential, TokenUsage } from "../../ai/clients"
 import { estimateTokens } from "../../ai/tokens"
 import { isAppError } from "../../shared/errors"
@@ -318,6 +320,30 @@ async function executeTool(
 	try {
 		return await tool.execute(context, args)
 	} catch (error) {
+		/**
+		 * A rejected argument is not a failure, it is a correction.
+		 *
+		 * Tools validate with zod, and a `ZodError` used to fall through to "the
+		 * tool failed, try a different approach" — which tells the model nothing
+		 * about *what* to try. A run spent a round sending `{"query":""}`, was told
+		 * only that something broke, and guessed its way to a second attempt.
+		 * Naming the field turns the next round into a fix rather than another
+		 * guess, and it is the same sentence a person reading the step needs.
+		 */
+		if (error instanceof ZodError) {
+			const detail = error.issues
+				.slice(0, 4)
+				.map((issue) => `${issue.path.join(".") || "argument"}: ${issue.message}`)
+				.join("; ")
+
+			return {
+				ok: false,
+				content: `The ${call.name} arguments were rejected — ${detail}. Send them again, corrected.`,
+				metadata: { error: "invalid_arguments" } as Record<string, unknown>,
+				usage: undefined,
+			}
+		}
+
 		log.error("agent.tool_failed", error, { runId: context.runId, tool: call.name })
 		return {
 			ok: false,
