@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { fillVisitor } from "./api-call.tool"
+import { fillVisitor } from "./visitor-template"
 
 const visitor = { id: "u_1", email: "a+b@x.io" }
 
