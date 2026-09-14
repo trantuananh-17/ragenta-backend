@@ -62,6 +62,12 @@ export const agentConfigSchema = z.object({
 	 */
 	graph: agentGraphSchema.nullable().default(null),
 	/**
+	 * Whether a tool marked as changing things pauses the run for a person to
+	 * approve. On by default; a run nobody is watching — an embedded chat — has
+	 * nobody to approve, so its agent turns this off (ADR-032).
+	 */
+	approveWrites: z.boolean().default(true),
+	/**
 	 * Whether this version remembers anything between runs, and about whom.
 	 *
 	 * Off by default. Memory changes what an agent says without anybody editing
