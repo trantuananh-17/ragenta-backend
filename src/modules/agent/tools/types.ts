@@ -11,11 +11,23 @@ import type { ModelSelection } from "../../model/model.service"
  * needs beyond this belongs to a domain service it calls, which does its own
  * workspace scoping (`.claude/rules/security.md`).
  */
+/**
+ * A widget visitor the host site's server has vouched for
+ * (`widget-guard.ts`). Absent for every other run, and for an anonymous
+ * visitor.
+ */
+export interface RunVisitor {
+	id: string
+	email?: string
+}
+
 export interface ToolContext {
 	workspaceId: string
 	projectId: string | null
 	userId: string | null
 	runId: string
+	/** Filled into a connection's `{{visitor.*}}` placeholders — by the server, never the model. */
+	visitor?: RunVisitor
 	/** Which step of the run this call is, for the usage reference it writes. */
 	stepSeq: number
 	/**

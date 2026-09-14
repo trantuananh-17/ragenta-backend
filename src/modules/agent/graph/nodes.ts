@@ -6,7 +6,7 @@ import { retrievalService } from "../../retrieval/retrieval.service"
 import type { CitationCollector } from "../citations"
 import { runToolLoop } from "../loop"
 import { toolsFor } from "../tools"
-import type { ToolId } from "../tools"
+import type { RunVisitor, ToolId } from "../tools"
 import {
 	browserNodeParams,
 	carriedValues,
@@ -38,6 +38,7 @@ export interface NodeContext {
 	projectId: string | null
 	userId: string | null
 	runId: string
+	visitor?: RunVisitor
 	client: ChatCapableClient
 	credential: ProviderCredential
 	selection: { provider: string; model: string }
@@ -564,6 +565,7 @@ async function* runToolNode(
 			projectId: context.projectId,
 			userId: context.userId,
 			runId: context.runId,
+			visitor: context.visitor,
 			// The model the agent version names, so an image step runs on the model
 			// its author chose rather than on the workspace's chat setting — which
 			// is a different model, chosen by somebody else, for something else.

@@ -85,6 +85,7 @@ widgetRoutes.post("/:publicKey/messages", arriving, async (c) => {
 	)
 
 	const input = widgetMessageSchema.parse(await c.req.json())
+	const identity = widgetService.verifyVisitorIdentity(visitor.widget, input.visitor)
 
 	// Before the model, never after. A refusal that arrives once the tokens are
 	// bought is not a limit.
@@ -97,7 +98,7 @@ widgetRoutes.post("/:publicKey/messages", arriving, async (c) => {
 		// No user. A visitor is not one, and inventing an actor would put a
 		// colleague's name on a stranger's conversation.
 		null,
-		{ trigger: "widget", widgetId: visitor.widget.id },
+		{ trigger: "widget", widgetId: visitor.widget.id, visitor: identity },
 	)
 
 	if (visitor.issuedToken) c.header("X-Ragenta-Visitor", visitor.issuedToken)

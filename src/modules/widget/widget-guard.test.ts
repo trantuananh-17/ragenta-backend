@@ -7,7 +7,9 @@ import {
 	newVisitorId,
 	originAllowed,
 	readVisitorToken,
+	signVisitorIdentity,
 	signVisitorToken,
+	visitorIdentityVerified,
 } from "./widget-guard"
 
 const SECRET = "a-test-secret-at-least-32-characters-long"
@@ -112,5 +114,21 @@ describe("the visitor token", () => {
 	it("carries the widget, so a token minted for one cannot be used on another", () => {
 		const signed = signVisitorToken(token, SECRET)
 		expect(readVisitorToken(signed, SECRET, 60_000)?.widgetId).toBe("w_1")
+	})
+})
+
+describe("a signed visitor identity", () => {
+	const identity = { id: "user_42", email: "u@shop.test" }
+
+	it("accepts the hash the host server computed", () => {
+		const hash = signVisitorIdentity(identity.id, SECRET)
+		expect(visitorIdentityVerified(identity, hash, SECRET)).toBe(true)
+		expect(visitorIdentityVerified(identity, hash.toUpperCase(), SECRET)).toBe(true)
+	})
+
+	it("refuses a hash for somebody else, or from another secret", () => {
+		expect(visitorIdentityVerified(identity, signVisitorIdentity("user_43", SECRET), SECRET)).toBe(false)
+		expect(visitorIdentityVerified(identity, signVisitorIdentity(identity.id, "other"), SECRET)).toBe(false)
+		expect(visitorIdentityVerified(identity, "nope", SECRET)).toBe(false)
 	})
 })

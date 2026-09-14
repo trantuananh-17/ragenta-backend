@@ -23,6 +23,18 @@ export const saveIntegrationSchema = z.object({
 	secret: z.string().trim().min(1).max(500).optional(),
 	authHeader: z.string().trim().max(100).nullable().default(null),
 	authPrefix: z.string().max(40).default(""),
+	/**
+	 * Header name → value. A value may hold `{{visitor.id}}` or
+	 * `{{visitor.email}}`, filled at call time from the signed widget visitor.
+	 * The secret header is separate and stays encrypted; these are not secret.
+	 */
+	extraHeaders: z
+		.record(
+			z.string().trim().regex(/^[a-z0-9-]{1,100}$/i, "Header names are letters, digits and `-`."),
+			z.string().max(500),
+		)
+		.refine((headers) => Object.keys(headers).length <= 10, { message: "At most 10 headers." })
+		.default({}),
 	allowedMethods: z.array(z.enum(METHODS)).max(5).default(["GET"]),
 	allowedPathPrefix: z.string().trim().max(200).default(""),
 	/** Exact addresses, or `*@domain`. A bare `*` is deliberately not accepted. */

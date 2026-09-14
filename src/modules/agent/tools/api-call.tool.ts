@@ -19,12 +19,43 @@ const parameters = z.object({
 		.string()
 		.max(1_000)
 		.default("/")
-		.describe("Path and query on that connection's base URL, e.g. /v1/contacts?limit=10."),
+		.describe(
+			"Path and query on that connection's base URL, e.g. /v1/contacts?limit=10. Write {{visitor.id}} or {{visitor.email}} where the current visitor's identity belongs; it is filled in for you.",
+		),
 	body: z.string().max(8_000).optional().describe("JSON body, for POST, PUT and PATCH."),
 })
 
 /** What the model gets back, before a large payload would drown its context. */
 const MAX_CONTENT = 8_000
+
+const VISITOR_PLACEHOLDER = /\{\{\s*visitor\.(id|email)\s*\}\}/g
+
+/**
+ * Fills `{{visitor.id}}` / `{{visitor.email}}` from the run's signed visitor.
+ *
+ * The model writes the placeholder, never the value: it does not know the
+ * visitor's email and cannot be told a different one by a fetched page. A
+ * placeholder with no visitor behind it — an anonymous chat, or a signed-in one
+ * without an email — is a refusal rather than an empty string, because an
+ * identity-scoped call made with a blank identity is the far API's problem to
+ * notice and not all of them do.
+ */
+export function fillVisitor(
+	template: string,
+	visitor: ToolContext["visitor"],
+	encode: (value: string) => string = (value) => value,
+): string | undefined {
+	let missing = false
+	const filled = template.replace(VISITOR_PLACEHOLDER, (_match, field: "id" | "email") => {
+		const value = visitor?.[field]
+		if (value === undefined) {
+			missing = true
+			return ""
+		}
+		return encode(value)
+	})
+	return missing ? undefined : filled
+}
 
 /**
  * Call a system a platform administrator has connected.
@@ -75,7 +106,16 @@ export const apiCallTool: AgentTool = {
 				}
 			}
 
-			const path = input.path.startsWith("/") ? input.path : `/${input.path}`
+			const rawPath = input.path.startsWith("/") ? input.path : `/${input.path}`
+			const path = fillVisitor(rawPath, context.visitor, encodeURIComponent)
+			if (path === undefined) {
+				return {
+					ok: false,
+					content:
+						"This call needs to know who the visitor is, and this conversation has no signed-in visitor.",
+					metadata: { integration: row.id, refused: "visitor" },
+				}
+			}
 			if (row.allowedPathPrefix && !path.startsWith(row.allowedPathPrefix)) {
 				return {
 					ok: false,
@@ -85,6 +125,19 @@ export const apiCallTool: AgentTool = {
 			}
 
 			const headers: Record<string, string> = { accept: "application/json" }
+			for (const [name, template] of Object.entries(row.extraHeaders)) {
+				const value = fillVisitor(template, context.visitor)
+				if (value === undefined) {
+					return {
+						ok: false,
+						content:
+							"This connection identifies the visitor to the far system, and this conversation has no signed-in visitor.",
+						metadata: { integration: row.id, refused: "visitor" },
+					}
+				}
+				headers[name] = value
+			}
+			// After the extras, so a configured header cannot shadow the secret's.
 			if (secret && row.authHeader) {
 				headers[row.authHeader] = `${row.authPrefix}${secret}`
 			}

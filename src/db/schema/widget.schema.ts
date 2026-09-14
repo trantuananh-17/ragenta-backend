@@ -59,6 +59,18 @@ export const chatWidget = pgTable(
 		 */
 		allowedOrigins: jsonb("allowed_origins").$type<string[]>().default([]).notNull(),
 
+		/**
+		 * AES-256-GCM ciphertext of the secret the customer's **server** uses to
+		 * sign who a visitor is (`HMAC-SHA256(secret, visitor.id)`).
+		 *
+		 * Without it the widget has to take a visitor's word for their own email,
+		 * and an agent that calls the customer's API with that email would be
+		 * fetching anybody's orders for anybody who typed their address. Shown to
+		 * the workspace that owns the widget, because their server has to hold it.
+		 * Null only on a widget saved before this existed; the next save fills it.
+		 */
+		encryptedIdentitySecret: text("encrypted_identity_secret"),
+
 		/** First thing the visitor sees. Empty means the agent opens. */
 		greeting: text("greeting").default("").notNull(),
 		/** A hex colour for the launcher. Presentation only. */

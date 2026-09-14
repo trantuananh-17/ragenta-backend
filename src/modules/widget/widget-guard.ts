@@ -129,6 +129,40 @@ export function newVisitorId(): string {
 	return randomBytes(16).toString("base64url")
 }
 
+/**
+ * Who the customer's own site says this visitor is — trusted only when their
+ * server signed it.
+ *
+ * The embed script is public and runs in the visitor's browser, so `email` on
+ * its own is a claim anybody can type. The customer's server holds the widget's
+ * identity secret and sends `hash = HMAC-SHA256(secret, id)` down with the page;
+ * a visitor who can forge that holds the secret, and then the site has a bigger
+ * problem than this widget. Only `id` is signed — the email is a label carried
+ * alongside it and is only as trustworthy as the id it comes with.
+ */
+export interface VisitorIdentity {
+	id: string
+	email?: string
+}
+
+export function generateIdentitySecret(): string {
+	return randomBytes(32).toString("base64url")
+}
+
+export function signVisitorIdentity(visitorId: string, secret: string): string {
+	return createHmac("sha256", secret).update(visitorId).digest("hex")
+}
+
+export function visitorIdentityVerified(
+	identity: VisitorIdentity,
+	presentedHash: string,
+	secret: string,
+): boolean {
+	const a = Buffer.from(presentedHash.toLowerCase())
+	const b = Buffer.from(signVisitorIdentity(identity.id, secret))
+	return a.length === b.length && timingSafeEqual(a, b)
+}
+
 function sign(payload: string, secret: string): string {
 	return createHmac("sha256", secret).update(payload).digest("base64url")
 }

@@ -1,4 +1,5 @@
 import { env } from "../../config/env"
+import { decryptSecret, encryptSecret } from "../../shared/crypto"
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../../shared/errors"
 import { newId } from "../../shared/id"
 import { logger } from "../../shared/logger"
@@ -11,12 +12,15 @@ import type { PlanName } from "../billing/plans"
 import { widgetRepository } from "./widget.repository"
 import type { ChatWidgetRow } from "./widget.repository"
 import {
+	generateIdentitySecret,
 	generateWidgetKey,
 	newVisitorId,
 	originAllowed,
 	readVisitorToken,
 	signVisitorToken,
+	visitorIdentityVerified,
 } from "./widget-guard"
+import type { VisitorIdentity } from "./widget-guard"
 import type { SaveWidgetInput } from "./widget.dto"
 
 const log = logger.child({ module: "widget" })
@@ -82,6 +86,8 @@ export const widgetService = {
 			// Generated once and never rotated silently: the key is pasted into
 			// somebody else's website, and changing it breaks their page.
 			publicKey: existing?.publicKey ?? generateWidgetKey(),
+			encryptedIdentitySecret:
+				existing?.encryptedIdentitySecret ?? encryptSecret(generateIdentitySecret()),
 			allowedOrigins: input.allowedOrigins,
 			greeting: input.greeting,
 			accentColor: input.accentColor,
@@ -166,6 +172,29 @@ export const widgetService = {
 	},
 
 	/**
+	 * Turns what the host page sent into an identity the run may act on.
+	 *
+	 * A signature that does not check out is a refusal, not an anonymous visitor:
+	 * a host that has wired identity up wrongly should find out on their first
+	 * test message, not by their agent quietly answering as a stranger.
+	 */
+	verifyVisitorIdentity(
+		widget: ChatWidgetRow,
+		presented: { id: string; email?: string; hash: string } | undefined,
+	): VisitorIdentity | undefined {
+		if (!presented) return undefined
+		const identity: VisitorIdentity = { id: presented.id, email: presented.email }
+		if (
+			!widget.encryptedIdentitySecret ||
+			!visitorIdentityVerified(identity, presented.hash, decryptSecret(widget.encryptedIdentitySecret))
+		) {
+			log.warn("widget.identity_refused", { widgetId: widget.id })
+			throw new ValidationError("The visitor identity could not be verified.")
+		}
+		return identity
+	},
+
+	/**
 	 * The two limits that stand between a public endpoint and a spent wallet.
 	 *
 	 * Checked **before** the model is called, not after: a refusal that arrives
@@ -245,7 +274,12 @@ export const widgetService = {
 	},
 }
 
-/** The public key is returned here — it is publishable, and the screen has to show it. */
+/**
+ * The public key is returned here — it is publishable, and the screen has to
+ * show it. The identity secret is returned too, to the workspace that owns the
+ * widget and nobody else: their server has to hold it to sign visitors, and a
+ * secret they cannot read back is one they cannot configure.
+ */
 function toPublic(row: ChatWidgetRow) {
 	return {
 		id: row.id,
@@ -253,6 +287,9 @@ function toPublic(row: ChatWidgetRow) {
 		name: row.name,
 		enabled: row.enabled,
 		publicKey: row.publicKey,
+		identitySecret: row.encryptedIdentitySecret
+			? decryptSecret(row.encryptedIdentitySecret)
+			: null,
 		allowedOrigins: row.allowedOrigins,
 		greeting: row.greeting,
 		accentColor: row.accentColor,

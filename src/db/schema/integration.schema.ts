@@ -69,6 +69,14 @@ export const integration = pgTable(
 		authHeader: text("auth_header"),
 		/** Prefix before the secret in that header, e.g. `Bearer `. */
 		authPrefix: text("auth_prefix").default("").notNull(),
+		/**
+		 * Further headers every call carries, e.g. `X-User-Id: {{visitor.id}}`.
+		 *
+		 * The placeholders are filled from the run — a widget visitor the
+		 * customer's server has signed for — never from the model, so the agent
+		 * cannot be talked into asking about somebody else (`api-call.tool.ts`).
+		 */
+		extraHeaders: jsonb("extra_headers").$type<Record<string, string>>().default({}).notNull(),
 
 		/**
 		 * What an agent may do through this integration. Both are hard limits: a

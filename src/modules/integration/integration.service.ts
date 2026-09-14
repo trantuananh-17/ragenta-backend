@@ -134,6 +134,7 @@ export const integrationService = {
 			baseUrl: input.baseUrl,
 			authHeader: input.authHeader,
 			authPrefix: input.authPrefix,
+			extraHeaders: input.extraHeaders,
 			allowedMethods: input.allowedMethods,
 			allowedPathPrefix: input.allowedPathPrefix,
 			allowedRecipients: input.allowedRecipients,

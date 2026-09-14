@@ -43,6 +43,18 @@ export const widgetMessageSchema = z.object({
 	message: z.string().trim().min(1).max(2_000),
 	/** Continues an existing conversation. Absent starts one. */
 	conversationId: z.string().min(1).optional(),
+	/**
+	 * Who the host site says this is, signed by the host's server with the
+	 * widget's identity secret. Absent is an anonymous visitor; present but
+	 * unsigned or mis-signed is refused, never downgraded to anonymous.
+	 */
+	visitor: z
+		.object({
+			id: z.string().trim().min(1).max(200),
+			email: z.string().trim().email().max(320).optional(),
+			hash: z.string().trim().regex(/^[0-9a-f]{64}$/i, "hash must be hex HMAC-SHA256"),
+		})
+		.optional(),
 })
 
 export type SaveWidgetInput = z.infer<typeof saveWidgetSchema>

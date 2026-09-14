@@ -26,7 +26,7 @@ import { TOOL_CATALOGUE, isToolId } from "./catalogue"
 import type { ToolId } from "./catalogue"
 import type { AgentTool } from "./types"
 
-export type { AgentTool, ToolContext, ToolResult } from "./types"
+export type { AgentTool, RunVisitor, ToolContext, ToolResult } from "./types"
 export { TOOL_CATALOGUE, TOOL_IDS, isToolId, toolWrites } from "./catalogue"
 export type { ToolId } from "./catalogue"
 

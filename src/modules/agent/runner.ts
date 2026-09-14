@@ -36,10 +36,21 @@ import { runApprovedTool, runToolLoop } from "./loop"
 import { memoryService } from "../memory/memory.service"
 import { webhookService } from "../webhook/webhook.service"
 import { databaseToolFor, mcpToolsFor, toolWrites, toolsFor } from "./tools"
+import type { RunVisitor } from "./tools"
 import { renderMemories } from "./tools/memory-content"
 import { clearStop, isStopRequested } from "./stop-signal"
 
 const log = logger.child({ module: "agent.runner" })
+
+/** The signed widget visitor a run was started for, if any (`widget.routes.ts`). */
+function runVisitor(run: AgentRunRow): RunVisitor | undefined {
+	const stored = (run.input as { visitor?: { id?: unknown; email?: unknown } }).visitor
+	if (!stored || typeof stored.id !== "string") return undefined
+	return {
+		id: stored.id,
+		...(typeof stored.email === "string" ? { email: stored.email } : {}),
+	}
+}
 
 /** What the run was asked to do, read back off its own row rather than a caller. */
 function runInput(run: AgentRunRow): RunAgentInput {
@@ -187,7 +198,7 @@ export const agentRunner = {
 		 * else's website should be distinguishable in the run list from one a
 		 * colleague started (ADR-065).
 		 */
-		source?: { trigger: "widget"; widgetId: string },
+		source?: { trigger: "widget"; widgetId: string; visitor?: RunVisitor },
 	): Promise<PreparedRun> {
 		const agent = await agentRepository.findById(workspaceId, agentId)
 		if (!agent) throw new NotFoundError("Agent")
@@ -212,6 +223,9 @@ export const agentRunner = {
 				input: input.input,
 				documentIds: input.documentIds ?? [],
 				attachmentIds: input.attachmentIds ?? [],
+				// On the run rather than in memory, so a resumed or picked-up run
+				// still acts as the same person.
+				...(source?.visitor ? { visitor: source.visitor } : {}),
 			},
 		})
 		if (!run) throw new ValidationError("The run could not be started.")
@@ -690,6 +704,7 @@ export const agentRunner = {
 					projectId: prepared.agent.projectId,
 					userId: prepared.actorId,
 					runId: run.id,
+					visitor: runVisitor(run),
 					client: prepared.client,
 					credential: credential as ProviderCredential,
 					selection,
@@ -941,6 +956,7 @@ export const agentRunner = {
 						projectId: prepared.agent.projectId,
 						userId: prepared.actorId,
 						runId: prepared.run.id,
+						visitor: runVisitor(prepared.run),
 						stepSeq: 0,
 						model: selection,
 						signal: hooks.signal,
@@ -1011,6 +1027,7 @@ export const agentRunner = {
 				projectId: prepared.agent.projectId,
 				userId: prepared.actorId,
 				runId: prepared.run.id,
+				visitor: runVisitor(prepared.run),
 				model: selection,
 				signal: hooks.signal,
 			},

@@ -107,6 +107,7 @@ export function presentConnection(row: typeof integration.$inferSelect) {
 		secretHint: row.secretHint,
 		authHeader: row.authHeader,
 		authPrefix: row.authPrefix,
+		extraHeaders: row.extraHeaders,
 		allowedMethods: row.allowedMethods,
 		allowedPathPrefix: row.allowedPathPrefix,
 		allowedRecipients: row.allowedRecipients,

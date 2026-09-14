@@ -24,6 +24,7 @@ function row(overrides: Partial<IntegrationRow> & { id: string }): IntegrationRo
 		secretHint: null,
 		authHeader: null,
 		authPrefix: "",
+		extraHeaders: {},
 		allowedMethods: ["GET"],
 		allowedPathPrefix: "",
 		allowedRecipients: [],
