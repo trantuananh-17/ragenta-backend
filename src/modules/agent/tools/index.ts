@@ -2,7 +2,7 @@ import { z } from "zod"
 
 import type { ToolDefinition } from "../../../ai/clients"
 import type { CitationCollector } from "../citations"
-import { apiCallTool } from "./api-call.tool"
+import { createApiCallTool } from "./api-call.tool"
 import { APP_TOOLS } from "./app.tool"
 import { browserReadTool } from "./browser.tool"
 import { excelReadTool, excelWriteTool } from "./excel.tool"
@@ -21,6 +21,7 @@ import type { McpToolSummary } from "../../../db/schema/mcp.schema"
 import { isMcpToolId, mcpService, parseMcpToolId } from "../../mcp/mcp.service"
 import { datasourceService } from "../../datasource/datasource.service"
 import { createDatabaseTool } from "./database.tool"
+import { listIntegrations } from "./integrations"
 import { createMcpTool } from "./mcp.tool"
 import { TOOL_CATALOGUE, isToolId } from "./catalogue"
 import type { ToolId } from "./catalogue"
@@ -51,7 +52,6 @@ export function toolsFor(
 		if (id === "save_document") tools.push(createSaveDocumentTool(knowledgeBaseIds))
 		if (id === "http_request") tools.push(httpRequestTool)
 		if (id === "web_search") tools.push(webSearchTool)
-		if (id === "api_call") tools.push(apiCallTool)
 		if (id === "send_email") tools.push(sendEmailTool)
 		// The attachment id is an argument here, unlike a knowledge base id,
 		// because the run has no fixed list of images — but it is resolved
@@ -156,6 +156,31 @@ export async function databaseToolFor(
 					name: parameter.name,
 					type: parameter.type,
 				})),
+			})),
+		),
+	]
+}
+
+/**
+ * The `api_call` tool, with this workspace's connections written into its
+ * description — the same reason `database_query` carries its queries. Without
+ * the list, the model can only call a connection somebody named in the brief,
+ * which is exactly the technical instruction a non-technical customer cannot
+ * write.
+ */
+export async function apiCallToolFor(workspaceId: string, ids: string[]): Promise<AgentTool[]> {
+	if (!ids.includes("api_call")) return []
+
+	const connections = (await listIntegrations(workspaceId, "http_api")).filter(
+		(row) => row.enabled,
+	)
+	return [
+		createApiCallTool(
+			connections.map((row) => ({
+				name: row.name,
+				description: row.description,
+				allowedMethods: row.allowedMethods,
+				allowedPathPrefix: row.allowedPathPrefix,
 			})),
 		),
 	]

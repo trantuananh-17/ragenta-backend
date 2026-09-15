@@ -1116,6 +1116,11 @@ const ROUTE_DOCS: Record<string, RouteMeta> = {
 		tags: ["Embedded chat"],
 		access: "a publishable key, from an allowed origin",
 	},
+	"GET /v1/widget/:publicKey/history": {
+		summary: "The visitor's own earlier turns, read from their signed token. No session",
+		tags: ["Embedded chat"],
+		access: "a publishable key, from an allowed origin",
+	},
 	"POST /v1/widget/:publicKey/messages": {
 		summary: "A visitor's message, answered over SSE. No session",
 		tags: ["Embedded chat"],

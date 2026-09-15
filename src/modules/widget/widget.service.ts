@@ -92,6 +92,11 @@ export const widgetService = {
 			greeting: input.greeting,
 			accentColor: input.accentColor,
 			title: input.title,
+			quickQuestions: input.quickQuestions,
+			placeholder: input.placeholder,
+			launcherLabel: input.launcherLabel,
+			position: input.position,
+			language: input.language,
 			dailyCreditCeiling: input.dailyCreditCeiling.toFixed(4),
 			visitorHourlyLimit: input.visitorHourlyLimit,
 			createdBy: existing?.createdBy ?? actorId,
@@ -264,12 +269,30 @@ export const widgetService = {
 		}
 	},
 
+	/**
+	 * The visitor's own conversation so far, in the order it happened.
+	 *
+	 * Reads only by the id inside the signed token — never by anything the page
+	 * sends — so the one way to read a conversation is to hold the token that
+	 * started it. A visitor whose token was minted this request has no turns yet
+	 * and is answered without a query.
+	 */
+	async history(visitor: WidgetVisitor) {
+		if (visitor.issuedToken) return { turns: [] }
+		return { turns: await widgetRepository.visitorTurns(visitor.widget.id, visitor.visitorId, 20) }
+	},
+
 	/** What the embed page needs to render before anybody types anything. */
 	toEmbedConfig(widget: ChatWidgetRow) {
 		return {
 			title: widget.title,
 			greeting: widget.greeting,
 			accentColor: widget.accentColor,
+			quickQuestions: widget.quickQuestions,
+			placeholder: widget.placeholder,
+			launcherLabel: widget.launcherLabel,
+			position: widget.position,
+			language: widget.language,
 		}
 	},
 }
@@ -294,6 +317,11 @@ function toPublic(row: ChatWidgetRow) {
 		greeting: row.greeting,
 		accentColor: row.accentColor,
 		title: row.title,
+		quickQuestions: row.quickQuestions,
+		placeholder: row.placeholder,
+		launcherLabel: row.launcherLabel,
+		position: row.position,
+		language: row.language,
 		dailyCreditCeiling: Number(row.dailyCreditCeiling),
 		visitorHourlyLimit: row.visitorHourlyLimit,
 		createdAt: row.createdAt,

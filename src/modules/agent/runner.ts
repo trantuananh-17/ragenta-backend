@@ -29,13 +29,14 @@ import {
 } from "./checkpoint"
 import type { GraphState, LoopPause, PendingCall, RunCheckpoint } from "./checkpoint"
 import { CitationCollector } from "./citations"
+import { WIDGET_HISTORY_TURNS, historyMessages } from "./history-content"
 import { agentGraphSchema } from "./graph/types"
 import { runGraph } from "./graph/engine"
 import type { NodeContext } from "./graph/nodes"
 import { runApprovedTool, runToolLoop } from "./loop"
 import { memoryService } from "../memory/memory.service"
 import { webhookService } from "../webhook/webhook.service"
-import { databaseToolFor, mcpToolsFor, toolWrites, toolsFor } from "./tools"
+import { apiCallToolFor, databaseToolFor, mcpToolsFor, toolWrites, toolsFor } from "./tools"
 import type { RunVisitor } from "./tools"
 import { renderMemories } from "./tools/memory-content"
 import { clearStop, isStopRequested } from "./stop-signal"
@@ -138,6 +139,13 @@ export interface PreparedRun {
 	 * half-way through a node that has already been billed.
 	 */
 	attachments: MessageAttachmentRow[]
+	/**
+	 * The visitor's earlier turns on this widget, as prompt history. Empty for
+	 * every run that is not a widget turn. Loaded at `check` rather than where the
+	 * prompt is built, so a run the worker picks up later carries the same
+	 * conversation the request did.
+	 */
+	history: ChatMessage[]
 	actorId: string | null
 }
 
@@ -198,7 +206,7 @@ export const agentRunner = {
 		 * else's website should be distinguishable in the run list from one a
 		 * colleague started (ADR-065).
 		 */
-		source?: { trigger: "widget"; widgetId: string; visitor?: RunVisitor },
+		source?: { trigger: "widget"; widgetId: string; visitorId: string; visitor?: RunVisitor },
 	): Promise<PreparedRun> {
 		const agent = await agentRepository.findById(workspaceId, agentId)
 		if (!agent) throw new NotFoundError("Agent")
@@ -215,6 +223,7 @@ export const agentRunner = {
 			userId: actorId,
 			trigger: source?.trigger ?? "manual",
 			widgetId: source?.widgetId ?? null,
+			visitorId: source?.visitorId ?? null,
 			// `running` is claimed by the attempt itself, in `stream`, so a run
 			// that never gets that far is visibly waiting rather than apparently
 			// executing in a process that has not touched it.
@@ -401,6 +410,15 @@ export const agentRunner = {
 			}
 		}
 
+		// Only the single-prompt and tool-loop paths read it; flow runs build their
+		// own messages in `graph/nodes.ts` and do not carry it yet.
+		const history =
+			run.widgetId && run.visitorId
+				? historyMessages(
+						await agentRepository.recentTurns(run.widgetId, run.visitorId, WIDGET_HISTORY_TURNS),
+					)
+				: []
+
 		return {
 			agent,
 			version,
@@ -412,6 +430,7 @@ export const agentRunner = {
 			checkpoint: null,
 			answers: {},
 			attachments,
+			history,
 		}
 	},
 
@@ -940,6 +959,7 @@ export const agentRunner = {
 		// call the servers; a run with none pays nothing.
 		tools.push(...(await mcpToolsFor(workspaceId, version.tools, hooks.signal)))
 		tools.push(...(await databaseToolFor(workspaceId, version.tools)))
+		tools.push(...(await apiCallToolFor(workspaceId, version.tools)))
 
 		/**
 		 * Resuming an approved write: the call has to happen *before* the loop is
@@ -1165,7 +1185,7 @@ ${event.call.arguments.slice(0, 800)}`,
 		prepared: PreparedRun,
 		instructions: string,
 	): Promise<ChatMessage[]> {
-		const { messages } = assemblePrompt(prepared.input.input, [], [], {
+		const { messages } = assemblePrompt(prepared.input.input, [], prepared.history, {
 			contextWindow: FALLBACK_CONTEXT_WINDOW,
 			maxOutputTokens: prepared.version.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
 			grounding: "tools",
@@ -1269,7 +1289,7 @@ ${event.call.arguments.slice(0, 800)}`,
 		const grounding: Grounding =
 			baseIds.length === 0 ? "open" : version.groundedOnly ? "documents" : "documents-open"
 
-		const { messages, used } = assemblePrompt(input.input, retrieved, [], {
+		const { messages, used } = assemblePrompt(input.input, retrieved, prepared.history, {
 			contextWindow: definition?.contextWindow ?? FALLBACK_CONTEXT_WINDOW,
 			maxOutputTokens: version.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
 			grounding,

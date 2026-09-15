@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, lt, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gte, inArray, lt, sql } from "drizzle-orm"
 
 import { db } from "../../db/client"
 import type { DbExecutor } from "../../db/client"
@@ -137,6 +137,39 @@ export const widgetRepository = {
 			.where(inRange(widgetId, from, to))
 			.orderBy(desc(agentRun.createdAt))
 			.limit(limit)
+	},
+
+	/**
+	 * One visitor's conversation, for the embed to show again after a reload.
+	 *
+	 * Finished turns only — a pending or running one is the answer still
+	 * streaming into the page. Failed and stopped turns are kept: the visitor saw
+	 * them happen and a history that quietly forgets them reads as a different
+	 * conversation. The question is clipped hard because a visitor can paste a
+	 * page; the answer is clipped where the model's own output ceiling makes the
+	 * limit moot.
+	 */
+	async visitorTurns(widgetId: string, visitorId: string, limit: number, executor: DbExecutor = db) {
+		const rows = await executor
+			.select({
+				id: agentRun.id,
+				question: sql<string>`left(coalesce(${agentRun.input} ->> 'input', ''), 2000)`,
+				answer: sql<string | null>`left(${agentRun.output}, 20000)`,
+				error: agentRun.error,
+				status: agentRun.status,
+				createdAt: agentRun.createdAt,
+			})
+			.from(agentRun)
+			.where(
+				and(
+					eq(agentRun.widgetId, widgetId),
+					eq(agentRun.visitorId, visitorId),
+					inArray(agentRun.status, ["succeeded", "failed", "stopped"]),
+				),
+			)
+			.orderBy(desc(agentRun.createdAt))
+			.limit(limit)
+		return rows.reverse()
 	},
 
 	/**

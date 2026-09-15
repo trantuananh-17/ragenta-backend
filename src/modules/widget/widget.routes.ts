@@ -77,6 +77,18 @@ widgetRoutes.get("/:publicKey/config", arriving, async (c) => {
 	return c.json(widgetService.toEmbedConfig(visitor.widget))
 })
 
+/** The visitor's conversation so far, so a page reload does not lose it. */
+widgetRoutes.get("/:publicKey/history", arriving, async (c) => {
+	const visitor = await widgetService.resolveVisitor(
+		requireParam(c, "publicKey"),
+		c.req.header("origin"),
+		c.req.header("x-ragenta-visitor"),
+	)
+
+	if (visitor.issuedToken) c.header("X-Ragenta-Visitor", visitor.issuedToken)
+	return c.json(await widgetService.history(visitor))
+})
+
 widgetRoutes.post("/:publicKey/messages", arriving, async (c) => {
 	const visitor = await widgetService.resolveVisitor(
 		requireParam(c, "publicKey"),
@@ -98,7 +110,12 @@ widgetRoutes.post("/:publicKey/messages", arriving, async (c) => {
 		// No user. A visitor is not one, and inventing an actor would put a
 		// colleague's name on a stranger's conversation.
 		null,
-		{ trigger: "widget", widgetId: visitor.widget.id, visitor: identity },
+		{
+			trigger: "widget",
+			widgetId: visitor.widget.id,
+			visitorId: visitor.visitorId,
+			visitor: identity,
+		},
 	)
 
 	if (visitor.issuedToken) c.header("X-Ragenta-Visitor", visitor.issuedToken)

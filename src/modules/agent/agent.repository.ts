@@ -194,6 +194,40 @@ export const agentRepository = {
 	},
 
 	/**
+	 * What one widget visitor asked and was answered, most recent `limit` turns,
+	 * oldest first so they read as a conversation.
+	 *
+	 * Succeeded runs only: a failed or stopped turn has no answer worth repeating
+	 * to the model, and a pending one is the turn being answered right now. Each
+	 * side is clipped in SQL so one pasted page cannot crowd the other turns out
+	 * of the prompt's history budget before `assemblePrompt` even sees them.
+	 */
+	async recentTurns(
+		widgetId: string,
+		visitorId: string,
+		limit: number,
+		executor: DbExecutor = db,
+	): Promise<{ question: string; answer: string }[]> {
+		const rows = await executor
+			.select({
+				question: sql<string>`left(coalesce(${agentRun.input} ->> 'input', ''), 2000)`,
+				answer: sql<string>`left(${agentRun.output}, 2000)`,
+			})
+			.from(agentRun)
+			.where(
+				and(
+					eq(agentRun.widgetId, widgetId),
+					eq(agentRun.visitorId, visitorId),
+					eq(agentRun.status, "succeeded"),
+					sql`${agentRun.output} <> ''`,
+				),
+			)
+			.orderBy(desc(agentRun.createdAt))
+			.limit(limit)
+		return rows.reverse()
+	},
+
+	/**
 	 * A step is identified by `(run_id, seq)`, so a step this run has already
 	 * written is the same step, not a second one.
 	 *

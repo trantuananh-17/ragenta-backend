@@ -242,6 +242,17 @@ export const agentRun = pgTable(
 		 */
 		widgetId: text("widget_id"),
 		/**
+		 * The widget visitor this run was answered for — the id inside the signed
+		 * visitor token (ADR-065). Null for every non-widget run.
+		 *
+		 * It is what turns a widget's runs back into conversations: the visitor's
+		 * earlier turns are read by `(widget_id, visitor_id)` to show them again
+		 * after a page reload and to give the agent its history. Not a reference to
+		 * any table, because a visitor is not a row anywhere — the token is the
+		 * whole of their identity.
+		 */
+		visitorId: text("visitor_id"),
+		/**
 		 * The API key that asked for this run, when a program did.
 		 *
 		 * A plain column for the same reason `widget_id` is one: the run is a record
@@ -320,6 +331,8 @@ export const agentRun = pgTable(
 		),
 		// The comparison's own read: the runs of one comparison, and nothing else.
 		index("agentRun_comparisonId_idx").on(table.comparisonId),
+		// One visitor's conversation on one widget, in order.
+		index("agentRun_widget_visitor_idx").on(table.widgetId, table.visitorId, table.createdAt),
 	],
 )
 

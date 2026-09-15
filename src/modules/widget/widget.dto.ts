@@ -34,6 +34,11 @@ export const saveWidgetSchema = z.object({
 		.regex(/^#[0-9a-f]{6}$/i, "Use a hex colour like #7c3aed.")
 		.default("#7c3aed"),
 	title: z.string().trim().min(1).max(60).default("Chat"),
+	quickQuestions: z.array(z.string().trim().min(1).max(80)).max(6).default([]),
+	placeholder: z.string().trim().min(1).max(80).default("Type a message…"),
+	launcherLabel: z.string().trim().max(40).default(""),
+	position: z.enum(["right", "left"]).default("right"),
+	language: z.enum(["en", "vi"]).default("en"),
 	/** Credits this widget may spend in a UTC day. The money guard. */
 	dailyCreditCeiling: z.number().min(1_000).max(10_000_000).default(50_000),
 	visitorHourlyLimit: z.number().int().min(1).max(200).default(20),

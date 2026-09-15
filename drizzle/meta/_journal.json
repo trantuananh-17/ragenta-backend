@@ -253,6 +253,20 @@
       "when": 1789354237680,
       "tag": "0035_widget_identity",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1789459006106,
+      "tag": "0036_wakeful_madrox",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1789459781569,
+      "tag": "0037_curly_beyonder",
+      "breakpoints": true
     }
   ]
 }

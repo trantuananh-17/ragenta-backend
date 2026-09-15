@@ -5,7 +5,7 @@ import { ValidationError } from "../../../shared/errors"
 import { retrievalService } from "../../retrieval/retrieval.service"
 import type { CitationCollector } from "../citations"
 import { runToolLoop } from "../loop"
-import { toolsFor } from "../tools"
+import { apiCallToolFor, toolsFor } from "../tools"
 import type { RunVisitor, ToolId } from "../tools"
 import {
 	browserNodeParams,
@@ -272,6 +272,7 @@ const agentNode: NodeImplementation = {
 		const prompt = resolveTemplate(params.prompt, scope(context))
 		const system = resolveTemplate(params.system, scope(context))
 		const tools = toolsFor(params.tools, context.knowledgeBaseIds, context.citations)
+		tools.push(...(await apiCallToolFor(context.workspaceId, params.tools)))
 
 		const messages: ChatMessage[] = [
 			...(system ? [{ role: "system" as const, content: system }] : []),

@@ -76,6 +76,19 @@ export const chatWidget = pgTable(
 		/** A hex colour for the launcher. Presentation only. */
 		accentColor: text("accent_color").default("#7c3aed").notNull(),
 		title: text("title").default("Chat").notNull(),
+		/** Suggested questions shown as chips before the visitor types. */
+		quickQuestions: jsonb("quick_questions").$type<string[]>().default([]).notNull(),
+		placeholder: text("placeholder").default("Type a message…").notNull(),
+		/** Text beside the launcher bubble. Empty means icon only. */
+		launcherLabel: text("launcher_label").default("").notNull(),
+		/** `right | left` — which corner the launcher sits in. */
+		position: text("position").default("right").notNull(),
+		/**
+		 * `en | vi` — the language of the widget's own fixed strings ("Send",
+		 * "Searching…"). The agent answers in whatever language it is briefed for;
+		 * this is only the chrome around it.
+		 */
+		language: text("language").default("en").notNull(),
 
 		/**
 		 * The money guard: credits this widget may spend in a UTC day.
@@ -100,6 +113,8 @@ export const chatWidget = pgTable(
 	},
 	(table) => [
 		check("chatWidget_visitorLimit_check", sql`${table.visitorHourlyLimit} between 1 and 200`),
+		check("chatWidget_position_check", sql`${table.position} in ('right', 'left')`),
+		check("chatWidget_language_check", sql`${table.language} in ('en', 'vi')`),
 		// The lookup every visitor request makes, and the reason the key is a
 		// column rather than a hash.
 		uniqueIndex("chatWidget_publicKey_uidx").on(table.publicKey),
